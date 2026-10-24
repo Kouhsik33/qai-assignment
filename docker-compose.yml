@@ -1,0 +1,67 @@
+# Safe Counter: Postgres, the mock AI, a one-shot migrator, and the API.
+# The API container holds only the restricted app credentials (sc_app).
+# Owner credentials live only in the migrate and tools containers.
+
+x-owner-env: &owner-env
+  OWNER_DATABASE_URL: postgresql://sc_owner:owner_pw@db:5432/safecounter
+  APP_DB_PASSWORD: app_pw
+
+x-app-env: &app-env
+  DATABASE_URL: postgresql://sc_app:app_pw@db:5432/safecounter
+  AI_URL: http://mock_ai:8099/v1/propose
+  AI_DEADLINE_SECONDS: "5"
+  ALLOW_AI_MODE_OVERRIDE: "1"
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sc_owner
+      POSTGRES_PASSWORD: owner_pw
+      POSTGRES_DB: safecounter
+    ports: ["5433:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sc_owner -d safecounter"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mock_ai:
+    image: python:3.12-slim
+    command: ["python3", "/mock/mock_ai_server.py"]
+    environment:
+      MOCK_HOST: 0.0.0.0
+      MOCK_PORT: "8099"
+    volumes: ["./mock_ai:/mock:ro"]
+    ports: ["8099:8099"]
+
+  migrate:
+    build: .
+    command: ["python", "-m", "safecounter.admin", "init"]
+    environment: *owner-env
+    volumes: [".:/app"]
+    depends_on:
+      db: {condition: service_healthy}
+
+  api:
+    build: .
+    command: ["uvicorn", "safecounter.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *app-env
+    volumes: [".:/app"]
+    ports: ["8080:8000"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      mock_ai: {condition: service_started}
+
+  # Runs tests and admin commands: docker compose run --rm tools pytest
+  tools:
+    build: .
+    profiles: ["tools"]
+    environment:
+      <<: [*owner-env, *app-env]
+      AI_DEADLINE_SECONDS: "2"
+      SC_API: http://api:8000
+    volumes: [".:/app"]
+    depends_on:
+      db: {condition: service_healthy}
+      mock_ai: {condition: service_started}

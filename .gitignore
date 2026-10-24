@@ -1,2 +1,6 @@
 # Confidential assignment brief: keep out of the repository
 QuantumGandivaAI - Safe Counter Assignment.pdf
+
+# Python
+__pycache__/
+.pytest_cache/
