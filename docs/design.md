@@ -54,3 +54,27 @@ The AI is a separate process (the supplied mock, or a compatible model) reached 
 1. **An unauthorized change is applied**: hostile or mislabelled AI output, a scope escape, or a code path that skips the gate. Answered by one gate, server-derived sensitivity, allowlists, and database grants, RLS and CHECKs underneath. Known gap: the app role can still update the changeable columns directly, so a bug outside the gate could skip policy checks.
 2. **A plausible but wrong proposal is approved by a person**: a charge on the wrong rental (N04), an attacker's email from pasted text (N08). No rule catches every semantic error. Answered by verbatim evidence checks, evidence-value agreement for money, flags, before→after values and a required reason. This is the residual risk, and I will say so.
 3. **Integrity under concurrency or failure**: two approvals at once, a change without its audit row, a forked audit chain, a shop setting leaking through a pooled connection, partial state after an AI timeout. Answered by row locks, one transaction per change, a locked per-shop chain head with unique `(shop_id, seq)`, `SET LOCAL` only, and no transaction open during the AI call. Limitation: a hash chain detects edits but anyone with database write access can recompute it from the edited row onward; stopping that needs an anchor outside the database.
+
+## What changed and why
+
+Added at the end of the build. The design above is unchanged; this section records where the build went further, changed course, or stopped short. Decision numbers refer to `docs/decisions.md`.
+
+**Built as designed:** one gate, server-derived sensitivity, per-proposal routing, the AI as a separate process with no database access or credentials, the restricted app role with RLS and column-level grants, per-shop hash chains with a locked head, synchronous AI call with no transaction open.
+
+**Added during the build**
+- **Database-enforced proposal lifecycle.** A trigger allows proposals to be created only as pending or blocked, lets only pending ones change, requires who, when and why, and refuses a decision by the requester (R4), so rule R5 holds even for a direct SQL update by the app role.
+- **Stale-proposal check (D20).** Each proposal stores the value it was based on; approval is refused if the record changed since. Needed because AI values such as hire_days are derived from the current value.
+- **Evidence must agree with the value (D21).** A verbatim quote is not enough: money amounts, clock times and phone digits in the evidence must match the value, and any non-GBP currency blocks. This is what catches N04's 12000p from "120 euros", which the range check alone lets through.
+- **Edit-before-approve re-derives sensitivity** from the corrected value, so correcting "available" to "retired" turns it into a write-off that only an area admin can approve.
+
+**Changed**
+- **Times are stored as ISO text with offset (D17),** not `timestamptz`, because the brief asks to keep the offset and the audit hash must cover exactly what is stored.
+- **Failed AI calls keep the note and a failed task row (D19).** "Nothing saved" is read as no proposals and no business changes.
+- **Rejection needs the same authority as approval (D18).**
+
+**What the three failures turned into**
+1. *Unauthorised change:* tested by role, value-rule, scope, hostile-output and privilege tests, plus a source scan that only the gate writes business tables. Still open: the gate is enforced by code structure, not by the database alone (D02).
+2. *Plausible but wrong proposal approved:* the router blocked all 4 of the mock's wrong proposals, at the cost of 1 false block (N05's paraphrased refund). Still open, and the main residual risk: a semantically wrong proposal that passes every rule reaches a person.
+3. *Integrity under concurrency or failure:* tested by the threaded double-approval test (15 of 15 repeated runs), audit rollback with the change, tamper/delete/truncate detection, and every mock failure mode. Still open: a database owner can rewrite the chain; there is no external anchor.
+
+**Not done:** the scribe as a separate worker holding a per-task token (D03), the gate as a database function (D02), external anchoring of audit heads, and any measurement of the prompt against a real model.

@@ -2,11 +2,18 @@
 
 The safe core of a multi-shop equipment-hire backend. An AI scribe reads staff handover notes and **proposes** changes; a person decides; every change goes through one gate and leaves a hash-chained audit trail; an AI that is wrong or manipulated cannot change a record on its own.
 
-Python 3.12 · FastAPI · psycopg 3 with raw SQL (no ORM) · PostgreSQL 16 · the supplied mock AI. Design: [`docs/design.md`](docs/design.md). Decisions: [`docs/decisions.md`](docs/decisions.md). The original pack README is in [`docs/candidate-pack-README.md`](docs/candidate-pack-README.md).
+Python 3.12 · FastAPI · psycopg 3 with raw SQL (no ORM) · PostgreSQL 16 · the supplied mock AI. | Document | |
+| --- | --- |
+| [`docs/design.md`](docs/design.md) | Level 0 design, with "What changed and why" at the end |
+| [`docs/decisions.md`](docs/decisions.md) | Decision log, D01 onwards |
+| [`docs/scale.md`](docs/scale.md) | Serving 2,000 shops |
+| [`docs/ai-use.md`](docs/ai-use.md) | Where AI tools helped and where they were overruled |
+| [`evals/results.md`](evals/results.md) | Measured model-quality results (mock) |
+| [`docs/candidate-pack-README.md`](docs/candidate-pack-README.md) | The original pack README |
 
 ## Run it (about 5 minutes)
 
-Needs Docker. Host ports used: 8080 (API), 5433 (Postgres), 8099 (mock AI).
+Needs Docker with Compose v2. Host ports used: 8080 (API), 5433 (Postgres), 8099 (mock AI).
 
 ```bash
 docker compose up -d --build                     # Postgres, mock AI, migrate+seed, API
@@ -14,6 +21,8 @@ curl -s localhost:8080/health                    # {"ok":true}
 docker compose run --rm tools pytest -q          # the test suite (about 25 s)
 ./scripts/demo.sh                                # the full demo; PAUSE=1 ./scripts/demo.sh to step through
 ```
+
+Verified on a fresh clone of this repository with an empty Docker volume and `docker compose build --no-cache`: healthy after 26 s, 116 tests passed, demo complete, pack smoke test 19/19 (`python3 mock_ai/smoke_test.py`). Base images were already pulled; a first-time pull of `python:3.12-slim` and `postgres:16-alpine` adds download time.
 
 The demo and the `sc` CLI use the host's `python3` (standard library only). Without a host Python, run the CLI inside Docker: `docker compose run --rm tools python -m safecounter.cli note N01`.
 
@@ -209,7 +218,8 @@ What the tricky notes show:
 | 2D | Edit before approve | Done |
 | 2E | Hostile notes | Done: untrusted-data prompt, tripwire, and validation that does not depend on the prompt |
 | 2F | Keep the AI contained | Mostly: separate process, no DB access, output checked against the rules, only needed data sent. The AI holds **no** credential rather than a narrow token (D03) |
-| 3 | Any | Not done |
+| 3 | Real-model experiment (Groq, zero-shot vs few-shot) | Not done; planned as optional after submission essentials |
+| 3 | Event delivery, corrections with history, sandbox | Not done |
 
 ## Prompt and evaluation
 
@@ -231,3 +241,5 @@ What the tricky notes show:
 6. **No real model measured.** All numbers are for the mock.
 7. **Single process, synchronous AI call.** A request waits up to the AI deadline (5 s; a slow drip can take up to twice that). Fine for one shop counter; a queue would be needed at scale.
 8. **Demo auth only.** Static tokens per seeded user, stored hashed; no expiry or rotation.
+9. **Development credentials in `docker-compose.yml`.** The database passwords (`owner_pw`, `app_pw`) are local development values, not secrets; a real deployment would take them from a secret store.
+10. **Few notes, one model.** Nine notes are a regression set, not a benchmark; numbers from them do not generalise.
