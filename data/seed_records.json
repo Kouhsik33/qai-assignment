@@ -1,0 +1,62 @@
+{
+  "_about": "Starting state for Safe Counter. All people, shops, numbers and addresses are invented. Phone numbers use the UK range reserved for fiction (07700 900xxx). Money is integer pence (GBP). Times are Europe/London with offset.",
+  "shops": [
+    {"id": "shop_millbrook", "name": "Millbrook Tool Hire", "time_zone": "Europe/London"},
+    {"id": "shop_eastfield", "name": "Eastfield Tool Hire", "time_zone": "Europe/London"}
+  ],
+  "staff": [
+    {"id": "u_amira", "name": "Amira Shah"},
+    {"id": "u_ben", "name": "Ben Carter"},
+    {"id": "u_chloe", "name": "Chloe Evans"},
+    {"id": "u_dev", "name": "Dev Patel"},
+    {"id": "u_gus", "name": "Gus Morgan"},
+    {"id": "u_ewa", "name": "Ewa Nowak"},
+    {"id": "u_femi", "name": "Femi Adeyemi"}
+  ],
+  "memberships": [
+    {"staff_id": "u_amira", "shop_id": "shop_millbrook", "role": "counter"},
+    {"staff_id": "u_ben", "shop_id": "shop_millbrook", "role": "technician"},
+    {"staff_id": "u_chloe", "shop_id": "shop_millbrook", "role": "manager"},
+    {"staff_id": "u_dev", "shop_id": "shop_eastfield", "role": "counter"},
+    {"staff_id": "u_gus", "shop_id": "shop_eastfield", "role": "technician"},
+    {"staff_id": "u_ewa", "shop_id": "shop_eastfield", "role": "manager"},
+    {"staff_id": "u_femi", "shop_id": "shop_millbrook", "role": "area_admin"},
+    {"staff_id": "u_femi", "shop_id": "shop_eastfield", "role": "area_admin"}
+  ],
+  "customers": [
+    {"id": "c_m1", "shop_id": "shop_millbrook", "name": "Lena Hartley", "phone": "+447700900101", "email": "lena.hartley@example.com", "address": "4 Willow Close, Millbrook MB1 2AA", "id_check_ref": null},
+    {"id": "c_m2", "shop_id": "shop_millbrook", "name": "Priya Natt", "phone": "+447700900102", "email": "priya.natt@example.com", "address": "17 Station Road, Millbrook MB2 4CD", "id_check_ref": null},
+    {"id": "c_m3", "shop_id": "shop_millbrook", "name": "Tom Fairley", "phone": "+447700900103", "email": "tom.fairley@example.com", "address": "9 Mill Lane, Millbrook MB1 3EF", "id_check_ref": null},
+    {"id": "c_m4", "shop_id": "shop_millbrook", "name": "Sam Whitlock", "phone": "+447700900104", "email": "sam@whitlockbuilders.example.com", "address": "Unit 3, Canal Yard, Millbrook MB3 1GH", "id_check_ref": null},
+    {"id": "c_m5", "shop_id": "shop_millbrook", "name": "Dana Reid", "phone": "+447700900105", "email": "dana.reid@example.com", "address": "22 Elm Grove, Millbrook MB2 5JK", "id_check_ref": null},
+    {"id": "c_m6", "shop_id": "shop_millbrook", "name": "Kofi Mensah", "phone": "+447700900106", "email": "kofi.mensah@example.com", "address": "6 Rowan Court, Millbrook MB1 6LM", "id_check_ref": null},
+    {"id": "c_e1", "shop_id": "shop_eastfield", "name": "Gareth Price", "phone": "+447700900201", "email": "gareth.price@example.com", "address": "31 Harbour Street, Eastfield EF1 2NP", "id_check_ref": "IDC-EF-0042"},
+    {"id": "c_e2", "shop_id": "shop_eastfield", "name": "Hannah Brook", "phone": "+447700900202", "email": "hannah.brook@example.com", "address": "8 Quarry Rise, Eastfield EF2 7QR", "id_check_ref": null}
+  ],
+  "items": [
+    {"id": "i_m101", "shop_id": "shop_millbrook", "asset_tag": "MB-PW-01", "name": "Petrol pressure washer", "status": "on_hire", "service_note": null},
+    {"id": "i_m102", "shop_id": "shop_millbrook", "asset_tag": "MB-FS-01", "name": "Drum floor sander", "status": "on_hire", "service_note": null},
+    {"id": "i_m103", "shop_id": "shop_millbrook", "asset_tag": "MB-CM-01", "name": "Electric cement mixer", "status": "on_hire", "service_note": null},
+    {"id": "i_m104", "shop_id": "shop_millbrook", "asset_tag": "MB-TC-01", "name": "Wet tile cutter", "status": "on_hire", "service_note": null},
+    {"id": "i_m105", "shop_id": "shop_millbrook", "asset_tag": "MB-DH-01", "name": "Dehumidifier", "status": "on_hire", "service_note": null},
+    {"id": "i_m107", "shop_id": "shop_millbrook", "asset_tag": "MB-ST-01", "name": "Mobile scaffold tower", "status": "on_hire", "service_note": null},
+    {"id": "i_m108", "shop_id": "shop_millbrook", "asset_tag": "MB-CC-01", "name": "Carpet cleaner", "status": "on_hire", "service_note": null},
+    {"id": "i_m109", "shop_id": "shop_millbrook", "asset_tag": "MB-PC-01", "name": "Petrol plate compactor", "status": "in_repair", "service_note": "Engine noise reported 2026-10-20; awaiting inspection."},
+    {"id": "i_e201", "shop_id": "shop_eastfield", "asset_tag": "EF-TR-01", "name": "Plant trailer (licence check required)", "status": "on_hire", "service_note": null},
+    {"id": "i_e202", "shop_id": "shop_eastfield", "asset_tag": "EF-WS-01", "name": "Wallpaper steamer", "status": "on_hire", "service_note": null},
+    {"id": "i_e203", "shop_id": "shop_eastfield", "asset_tag": "EF-FS-02", "name": "Drum floor sander", "status": "available", "service_note": null}
+  ],
+  "rentals": [
+    {"id": "r_m5001", "shop_id": "shop_millbrook", "customer_id": "c_m2", "item_id": "i_m102", "hired_at": "2026-10-19T09:00:00+01:00", "hire_days": 3, "daily_rate_pence": 3500, "deposit_held_pence": 5000, "returned_at": null, "return_condition": null, "damage_charge_pence": null, "deposit_refund_pence": null},
+    {"id": "r_m5002", "shop_id": "shop_millbrook", "customer_id": "c_m3", "item_id": "i_m103", "hired_at": "2026-10-18T08:30:00+01:00", "hire_days": 3, "daily_rate_pence": 2500, "deposit_held_pence": 4000, "returned_at": null, "return_condition": null, "damage_charge_pence": null, "deposit_refund_pence": null},
+    {"id": "r_m5003", "shop_id": "shop_millbrook", "customer_id": "c_m3", "item_id": "i_m104", "hired_at": "2026-10-18T08:30:00+01:00", "hire_days": 3, "daily_rate_pence": 2000, "deposit_held_pence": 2000, "returned_at": null, "return_condition": null, "damage_charge_pence": null, "deposit_refund_pence": null},
+    {"id": "r_m5004", "shop_id": "shop_millbrook", "customer_id": "c_m1", "item_id": "i_m101", "hired_at": "2026-10-21T10:00:00+01:00", "hire_days": 2, "daily_rate_pence": 3000, "deposit_held_pence": 3000, "returned_at": null, "return_condition": null, "damage_charge_pence": null, "deposit_refund_pence": null},
+    {"id": "r_m5005", "shop_id": "shop_millbrook", "customer_id": "c_m4", "item_id": "i_m107", "hired_at": "2026-10-14T07:45:00+01:00", "hire_days": 7, "daily_rate_pence": 4500, "deposit_held_pence": 10000, "returned_at": null, "return_condition": null, "damage_charge_pence": null, "deposit_refund_pence": null},
+    {"id": "r_m5006", "shop_id": "shop_millbrook", "customer_id": "c_m5", "item_id": "i_m105", "hired_at": "2026-10-20T12:00:00+01:00", "hire_days": 3, "daily_rate_pence": 1800, "deposit_held_pence": 4000, "returned_at": null, "return_condition": null, "damage_charge_pence": null, "deposit_refund_pence": null},
+    {"id": "r_m5007", "shop_id": "shop_millbrook", "customer_id": "c_m6", "item_id": "i_m108", "hired_at": "2026-10-22T09:15:00+01:00", "hire_days": 1, "daily_rate_pence": 2800, "deposit_held_pence": 2500, "returned_at": null, "return_condition": null, "damage_charge_pence": null, "deposit_refund_pence": null},
+    {"id": "r_e7001", "shop_id": "shop_eastfield", "customer_id": "c_e1", "item_id": "i_e201", "hired_at": "2026-10-20T08:00:00+01:00", "hire_days": 3, "daily_rate_pence": 4000, "deposit_held_pence": 7500, "returned_at": null, "return_condition": null, "damage_charge_pence": null, "deposit_refund_pence": null},
+    {"id": "r_e7002", "shop_id": "shop_eastfield", "customer_id": "c_e2", "item_id": "i_e202", "hired_at": "2026-10-21T11:30:00+01:00", "hire_days": 2, "daily_rate_pence": 1500, "deposit_held_pence": 2000, "returned_at": null, "return_condition": null, "damage_charge_pence": null, "deposit_refund_pence": null},
+    {"id": "r_e6998", "shop_id": "shop_eastfield", "customer_id": "c_e2", "item_id": "i_e202", "hired_at": "2026-09-12T10:00:00+01:00", "hire_days": 2, "daily_rate_pence": 1500, "deposit_held_pence": 2000, "returned_at": "2026-09-14T16:20:00+01:00", "return_condition": "damaged", "damage_charge_pence": null, "deposit_refund_pence": 2000, "_closed": true, "_comment": "Closed rental. Steam plate panel scratched; charge never settled."}
+  ],
+  "_summary": "2 shops, 7 staff, 8 customers, 11 items, 9 open rentals (r_m5001 to r_m5007, r_e7001, r_e7002) and 1 closed rental (r_e6998)."
+}

@@ -1,0 +1,169 @@
+{
+  "_about": "Safe Counter rules. This file is the source of truth for roles, approval rules and fields. All data in this pack is synthetic.",
+  "version": "1.0",
+  "currency": "GBP",
+  "money_unit": "integer pence",
+  "time_zone": "Europe/London",
+  "roles": {
+    "counter": {
+      "label": "Counter staff",
+      "scope": "one shop",
+      "description": "Serves customers at one shop: hire-outs, returns, deposits, contact details."
+    },
+    "technician": {
+      "label": "Technician",
+      "scope": "one shop",
+      "description": "Checks and repairs returned equipment at one shop."
+    },
+    "manager": {
+      "label": "Shop manager",
+      "scope": "one shop",
+      "description": "Runs one shop. Approves money and customer-contact changes."
+    },
+    "area_admin": {
+      "label": "Area admin",
+      "scope": "several shops, one shop per request",
+      "description": "Manager rights in each assigned shop, plus write-offs and ID-check references. Acts inside one shop per request; no request spans shops."
+    }
+  },
+  "ai_service_identity": {
+    "id": "svc_ai_scribe",
+    "label": "AI scribe (not a person)",
+    "may": ["create proposals for the records in its task scope"],
+    "may_not": [
+      "read or write the database",
+      "approve or reject anything",
+      "name an approver or set a decision",
+      "propose changes outside its task scope (other shops, other records, other fields)",
+      "decide whether a change is sensitive",
+      "change its own prompt, rules, approval settings or this file"
+    ]
+  },
+  "approval_rules": [
+    {"id": "R1", "rule": "A person changing a normal field they may change: applies now."},
+    {"id": "R2", "rule": "A person changing a sensitive field: applies now if they hold an approver role for it; otherwise it waits for approval."},
+    {"id": "R3", "rule": "Every AI proposal waits. For a normal field, anyone who may change that field can approve it, including the person who wrote the note. For a sensitive field, only an approver role."},
+    {"id": "R4", "rule": "Nobody approves their own pending change. An AI proposal is not anyone's own change, so a manager may approve one in their own shop."},
+    {"id": "R5", "rule": "A rejected proposal can never be applied later, by any path. Every decision records who, when and why."},
+    {"id": "R6", "rule": "The server decides what is sensitive, from this file (including value rules such as a write-off). Never a label supplied by the AI."},
+    {"id": "R7", "rule": "Every applied change writes its audit row in the same transaction as the change."}
+  ],
+  "fields": [
+    {
+      "field": "rental.returned_at",
+      "type": "datetime",
+      "unit": "iso8601",
+      "format": "ISO 8601 in shop local time with offset, e.g. 2026-10-23T16:40:00+01:00",
+      "sensitive": false,
+      "may_change": ["counter", "technician", "manager", "area_admin"],
+      "ai_may_propose": true
+    },
+    {
+      "field": "rental.return_condition",
+      "type": "enum",
+      "unit": "enum",
+      "values": ["good", "needs_cleaning", "damaged", "parts_missing"],
+      "sensitive": false,
+      "may_change": ["counter", "technician", "manager", "area_admin"],
+      "ai_may_propose": true
+    },
+    {
+      "field": "rental.hire_days",
+      "type": "integer",
+      "unit": "days",
+      "min": 1,
+      "max": 28,
+      "sensitive": false,
+      "may_change": ["counter", "manager", "area_admin"],
+      "ai_may_propose": true
+    },
+    {
+      "field": "item.status",
+      "type": "enum",
+      "unit": "enum",
+      "values": ["available", "on_hire", "in_repair", "retired"],
+      "sensitive": false,
+      "may_change": ["counter", "technician", "manager", "area_admin"],
+      "value_rules": [
+        {
+          "when_value": "retired",
+          "meaning": "write-off",
+          "sensitive": true,
+          "may_change": ["technician", "manager", "area_admin"],
+          "approvers": ["area_admin"]
+        }
+      ],
+      "ai_may_propose": true
+    },
+    {
+      "field": "item.service_note",
+      "type": "text",
+      "unit": "text",
+      "max_length": 500,
+      "sensitive": false,
+      "may_change": ["technician", "manager", "area_admin"],
+      "ai_may_propose": true
+    },
+    {
+      "field": "rental.damage_charge_pence",
+      "type": "integer",
+      "unit": "pence",
+      "min": 0,
+      "max": 50000,
+      "sensitive": true,
+      "may_change": ["counter", "technician", "manager", "area_admin"],
+      "approvers": ["manager", "area_admin"],
+      "ai_may_propose": true
+    },
+    {
+      "field": "rental.deposit_refund_pence",
+      "type": "integer",
+      "unit": "pence",
+      "min": 0,
+      "max_rule": "must not exceed rental.deposit_held_pence",
+      "sensitive": true,
+      "may_change": ["counter", "manager", "area_admin"],
+      "approvers": ["manager", "area_admin"],
+      "ai_may_propose": true
+    },
+    {
+      "field": "customer.phone",
+      "type": "string",
+      "unit": "e164",
+      "format": "E.164, e.g. +447700900123",
+      "sensitive": true,
+      "may_change": ["counter", "manager", "area_admin"],
+      "approvers": ["manager", "area_admin"],
+      "ai_may_propose": true
+    },
+    {
+      "field": "customer.email",
+      "type": "string",
+      "unit": "email",
+      "sensitive": true,
+      "may_change": ["counter", "manager", "area_admin"],
+      "approvers": ["manager", "area_admin"],
+      "ai_may_propose": true
+    },
+    {
+      "field": "customer.address",
+      "type": "string",
+      "unit": "text",
+      "format": "one line",
+      "sensitive": true,
+      "may_change": ["counter", "manager", "area_admin"],
+      "approvers": ["manager", "area_admin"],
+      "ai_may_propose": true
+    },
+    {
+      "field": "customer.id_check_ref",
+      "type": "string",
+      "unit": "text",
+      "sensitive": true,
+      "may_change": ["area_admin"],
+      "approvers": ["area_admin"],
+      "ai_may_propose": false
+    }
+  ],
+  "_note_on_other_columns": "Records carry other columns (for example rental.deposit_held_pence, rental.hired_at, item.asset_tag). Only the fields listed above can be changed through proposals or edits."
+}

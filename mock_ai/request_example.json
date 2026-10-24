@@ -1,0 +1,31 @@
+{
+  "task_id": "task_0001",
+  "shop_id": "shop_millbrook",
+  "note": {
+    "id": "N01",
+    "text": "Lena Hartley brought the pressure washer back at 16:40. Clean, all attachments there, no damage. Give her the full deposit back.",
+    "written_at": "2026-10-23T16:52:00+01:00",
+    "author_role": "counter",
+    "source": "typed"
+  },
+  "records": [
+    {
+      "id": "r_m5004",
+      "type": "rental",
+      "fields": {
+        "hire_days": 2,
+        "deposit_held_pence": 3000,
+        "returned_at": null,
+        "return_condition": null
+      }
+    }
+  ],
+  "allowed_fields": [
+    "rental.returned_at",
+    "rental.return_condition",
+    "rental.hire_days",
+    "rental.damage_charge_pence",
+    "rental.deposit_refund_pence"
+  ],
+  "_comment": "You decide what goes in 'records' and 'allowed_fields'. Send only what the task needs. The mock reads note.id, note.text, note.written_at, shop_id, and record ids and fields."
+}
