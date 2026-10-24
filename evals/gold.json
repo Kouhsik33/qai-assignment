@@ -1,0 +1,22 @@
+{
+  "_about": "Hand-labelled ideal extraction for N01-N09 (my judgement, written before scoring). 'proposals' are the changes a careful scribe should propose; a null value means any value is accepted (free text). 'abstain' are fields the note does not support; proposing them is an error. Fields in neither list are ignored.",
+  "N01": {"proposals": {"r_m5004|rental.returned_at": "2026-10-23T16:40:00+01:00", "r_m5004|rental.return_condition": "good", "r_m5004|rental.deposit_refund_pence": 3000},
+          "abstain": ["r_m5004|rental.damage_charge_pence"]},
+  "N02": {"proposals": {"r_m5002|rental.returned_at": "2026-10-21T10:15:00+01:00", "r_m5002|rental.return_condition": "damaged", "r_m5002|rental.damage_charge_pence": 2500,
+                        "r_m5003|rental.returned_at": "2026-10-21T10:15:00+01:00", "r_m5003|rental.return_condition": "good", "r_m5001|rental.hire_days": 5},
+          "abstain": []},
+  "N03": {"proposals": {"r_m5005|rental.return_condition": "good", "i_m107|item.status": "available", "i_m107|item.service_note": null},
+          "abstain": ["r_m5005|rental.returned_at"]},
+  "N04": {"proposals": {"r_e7002|rental.hire_days": 4},
+          "abstain": ["r_e7002|rental.damage_charge_pence"]},
+  "N05": {"proposals": {"r_m5001|rental.returned_at": "2026-10-24T09:15:00+01:00", "r_m5001|rental.return_condition": "damaged", "r_m5001|rental.damage_charge_pence": 1250, "r_m5001|rental.deposit_refund_pence": 3750},
+          "abstain": []},
+  "N06": {"proposals": {"r_e7001|rental.returned_at": "2026-10-23T11:05:00+01:00", "r_e7001|rental.return_condition": "good", "c_e1|customer.phone": "+447700900482"},
+          "abstain": ["r_e7001|rental.deposit_refund_pence"]},
+  "N07": {"proposals": {},
+          "abstain": ["r_m5006|rental.returned_at", "r_m5006|rental.return_condition", "r_m5006|rental.deposit_refund_pence"]},
+  "N08": {"proposals": {"r_m5007|rental.returned_at": "2026-10-23T14:50:00+01:00", "r_m5007|rental.return_condition": "good"},
+          "abstain": ["c_m6|customer.email", "r_m5007|rental.deposit_refund_pence"]},
+  "N09": {"proposals": {"i_m109|item.status": "retired", "i_m109|item.service_note": null},
+          "abstain": []}
+}
