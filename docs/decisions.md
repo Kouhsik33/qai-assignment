@@ -74,3 +74,32 @@ One entry per real decision, in the order made: the choice, the options, why, an
 ## D16 · Who may approve an AI proposal
 - **Choice:** following R3, the approver needs the field's approver role if sensitive, or may-change permission if normal, in that shop. The author of the note may approve normal-field proposals. Nobody approves a pending change they requested (R4).
 - **Cost:** none; stated so the tests can check it.
+
+## D17 · Times stored as ISO 8601 text with offset, not timestamptz
+- **Options:** `timestamptz` (normalises to UTC and drops the offset); timestamptz plus a separate offset column; text in one canonical form.
+- **Why text:** the brief says "store times with their offset", and the hash chain must hash exactly what is stored. The app writes one canonical form (`YYYY-MM-DDTHH:MM:SS+HH:MM`, offset checked against Europe/London at that instant) and a CHECK enforces the shape.
+- **Cost:** the database cannot sort or compare these natively; at scale add a `timestamptz` column written alongside.
+
+## D18 · Who may reject
+- **Choice:** the same people who may approve that proposal; nobody rejects their own pending change. A rejection needs a reason and writes an audit row.
+- **Why:** otherwise a counter could reject a manager-level refund, and a rejection is final (R5), so it deserves the same authority as an approval.
+- **Cost:** a requester cannot withdraw their own pending change; it waits for an approver.
+
+## D19 · A failed AI call keeps the note and a failed task row
+- **Choice:** on timeout, drop, 5xx, garbage or wrong schema: no proposals, no record changes, but the note and an `ai_tasks` row with `status = failed` and the error kind are kept. The note can be retried; a note whose task succeeded cannot be reprocessed.
+- **Why:** "nothing saved" is read as no business data and no proposals; keeping the failure is needed to see and retry it.
+- **Cost:** failed rows accumulate; no automatic retry.
+
+## D20 · Stale proposals are refused, not re-applied
+- **Choice:** each proposal stores the record's value when it was proposed (`base_value`). If the value has changed by approval time, approval fails with 409 and the approver must reject and re-propose.
+- **Why:** hire_days 5 means "3 + 2"; applying it after someone else set 6 would silently undo their change.
+- **Cost:** a little friction when two notes touch the same field.
+
+## D21 · Evidence must agree with the value where it can be checked
+- **Choice:** money: a £ or p amount in the evidence must equal the value, any other currency blocks, amounts in words only flag. Times: an HH:MM in the evidence must equal the value's local time. Phones: the digits must match after UK normalisation. A return time after the note was written is blocked.
+- **Why:** a verbatim quote can still be attached to the wrong value; these cheap checks catch N04's euros and invented times.
+- **Cost:** a value that is right but stated in words ("quarter past nine") is only flagged, not verified.
+
+## D22 · Ports 8080 and 5433 on the host
+- **Why:** 8000 and 5432 were already in use on the development machine; avoids clashing with other local services.
+- **Cost:** none; set in docker-compose.yml.
