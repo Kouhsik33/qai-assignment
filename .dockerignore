@@ -1,4 +1,19 @@
+# Never copy local secrets or deployment config into an image (D30).
+.env
+.env.*
+*.env
+docker-compose.yml
+docker-compose.*.yml
+compose.yml
+compose.*.yml
+
+# Not needed in images
 .git
 *.pdf
 __pycache__
 .pytest_cache
+.DS_Store
+
+# Documentation is not needed at runtime
+README.md
+docs/

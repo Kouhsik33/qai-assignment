@@ -5,10 +5,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-APP_DSN = os.environ.get("DATABASE_URL", "postgresql://sc_app:app_pw@localhost:5433/safecounter")
-OWNER_DSN = os.environ.get("OWNER_DATABASE_URL", "postgresql://sc_owner:owner_pw@localhost:5433/safecounter")
-APP_DB_PASSWORD = os.environ.get("APP_DB_PASSWORD", "app_pw")
-DELIVERY_DB_PASSWORD = os.environ.get("DELIVERY_DB_PASSWORD", "delivery_pw")
+# Database credentials come only from the environment (docker-compose.yml sets them); no defaults,
+# so no password is baked into any image (D30).
+APP_DSN = os.environ.get("DATABASE_URL", "")
+OWNER_DSN = os.environ.get("OWNER_DATABASE_URL", "")
+APP_DB_PASSWORD = os.environ.get("APP_DB_PASSWORD", "")
+DELIVERY_DB_PASSWORD = os.environ.get("DELIVERY_DB_PASSWORD", "")
 
 RULES_PATH = Path(os.environ.get("RULES_PATH", ROOT / "data" / "roles_and_fields.json"))
 SEED_PATH = ROOT / "data" / "seed_records.json"
@@ -37,5 +39,8 @@ AI_TRANSPORT = os.environ.get("AI_TRANSPORT", "direct")
 SCRIBE_AGENT_URL = os.environ.get("SCRIBE_AGENT_URL", "http://localhost:8097/tasks")
 CALLBACK_BASE_URL = os.environ.get("CALLBACK_BASE_URL", "http://localhost:8080")
 AGENT_MARGIN_SECONDS = float(os.environ.get("AGENT_MARGIN_SECONDS", "2"))
+# Where the AI ingress relays tasks (the agent). Separate from SCRIBE_AGENT_URL, which is
+# where the main API sends them (the ingress's /dispatch in Compose) (D30).
+INGRESS_AGENT_URL = os.environ.get("INGRESS_AGENT_URL", "http://localhost:8097/tasks")
 
 LOW_CONFIDENCE = 0.7

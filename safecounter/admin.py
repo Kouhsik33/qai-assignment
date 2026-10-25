@@ -29,10 +29,14 @@ def token_for(staff_id: str) -> str:
 
 
 def connect():
+    if not config.OWNER_DSN:
+        raise SystemExit("OWNER_DATABASE_URL is not set")
     return psycopg.connect(config.OWNER_DSN, row_factory=dict_row, autocommit=False)
 
 
 def migrate(conn):
+    if not config.APP_DB_PASSWORD or not config.DELIVERY_DB_PASSWORD:
+        raise SystemExit("APP_DB_PASSWORD and DELIVERY_DB_PASSWORD must be set")
     with conn.cursor() as cur:
         cur.execute("CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, applied_at timestamptz DEFAULT now())")
         cur.execute("SELECT name FROM schema_migrations")

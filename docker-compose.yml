@@ -1,12 +1,14 @@
 # Safe Counter: Postgres, the mock AI, the scribe agent, a one-shot migrator, and the API.
 # The API container holds only the restricted app credentials (sc_app).
 # Owner credentials live only in the migrate and tools containers.
-# Two networks: Postgres is on "backend" only; the AI side (mock_ai, scribe_agent) is on
-# "ai" only, so the AI cannot even reach the database port (Level 2F, D27).
+# Two networks: Postgres and the main API are on "backend" only; the AI side (mock_ai,
+# scribe_agent) is on "ai" only. ai_ingress is the one service on both: the agent cannot
+# reach the database or any staff route, only the task-result endpoint (Level 2F, D27, D30).
 
 x-owner-env: &owner-env
   OWNER_DATABASE_URL: postgresql://sc_owner:owner_pw@db:5432/safecounter
   APP_DB_PASSWORD: app_pw
+  DELIVERY_DB_PASSWORD: delivery_pw
 
 x-app-env: &app-env
   DATABASE_URL: postgresql://sc_app:app_pw@db:5432/safecounter
@@ -53,10 +55,22 @@ services:
       AI_DEADLINE_SECONDS: "5"
       SCRIBE_AGENT_HOST: 0.0.0.0
       SCRIBE_AGENT_PORT: "8097"
-    volumes: [".:/app"]
+    # No bind mount: runs from its image, which holds no .env or compose file (D30).
     networks: [ai]
     depends_on:
       mock_ai: {condition: service_started}
+
+  # The only API the agent can reach: task-result submission and the task hand-off relay.
+  ai_ingress:
+    build: .
+    command: ["uvicorn", "safecounter.ai_ingress:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      DATABASE_URL: postgresql://sc_app:app_pw@db:5432/safecounter
+      INGRESS_AGENT_URL: http://scribe_agent:8097/tasks
+    networks: [backend, ai]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      scribe_agent: {condition: service_started}
 
   migrate:
     build: .
@@ -73,14 +87,14 @@ services:
     environment:
       <<: *app-env
       AI_TRANSPORT: agent
-      SCRIBE_AGENT_URL: http://scribe_agent:8097/tasks
-      CALLBACK_BASE_URL: http://api:8000
+      SCRIBE_AGENT_URL: http://ai_ingress:8000/dispatch
+      CALLBACK_BASE_URL: http://ai_ingress:8000
     volumes: [".:/app"]
     ports: ["8080:8000"]
-    networks: [backend, ai]
+    networks: [backend]
     depends_on:
       migrate: {condition: service_completed_successfully}
-      scribe_agent: {condition: service_started}
+      ai_ingress: {condition: service_started}
 
   # Optional real-model API (D23): docker compose --profile real up -d api_real
   # Reads GROQ_API_KEY from the local, git-ignored .env. Same restricted DB role.
@@ -97,7 +111,7 @@ services:
         required: false
     volumes: [".:/app"]
     ports: ["8081:8000"]
-    networks: [backend, ai]
+    networks: [backend]
     depends_on:
       migrate: {condition: service_completed_successfully}
 

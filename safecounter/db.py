@@ -18,6 +18,8 @@ _pool = None
 def pool() -> ConnectionPool:
     global _pool
     if _pool is None:
+        if not config.APP_DSN:
+            raise RuntimeError("DATABASE_URL is not set")
         _pool = ConnectionPool(config.APP_DSN, min_size=1, max_size=10,
                                kwargs={"row_factory": dict_row}, open=True)
     return _pool

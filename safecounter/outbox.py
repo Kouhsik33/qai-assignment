@@ -24,7 +24,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-DELIVERY_DSN = os.environ.get("DELIVERY_DATABASE_URL", "postgresql://sc_delivery:delivery_pw@localhost:5433/safecounter")
+DELIVERY_DSN = os.environ.get("DELIVERY_DATABASE_URL", "")     # from the environment only (D30)
 
 
 def enqueue(cur, *, shop_id: str, entry: dict, kind: str = "record.changed"):
