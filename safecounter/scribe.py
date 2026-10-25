@@ -51,6 +51,14 @@ INJECTION_PATTERNS = [
     r"\bmark\s+(every|all|each|this|these|the)?\s*(change|changes|request|proposal|proposals)\s+as\s+approved\b",
     r"\b(system prompt|you are now|new instructions)\b",
     r"^\s*system\s*:",
+    # A claim that someone with authority already approved it: approval never comes through a note.
+    r"\b(manager|area\s+admin|admin|boss|owner|supervisor|head\s+office)\b[^.\n]{0,40}?"
+    r"\b(ok(?:ay)?ed|ok'?d|approved|authori[sz]ed|signed\s+(?:this\s+|it\s+)?off|sanctioned)\b",
+    r"\b(approved|authori[sz]ed|okayed|signed\s+off|sanctioned)\s+by\s+(the\s+|your\s+)?"
+    r"(manager|area\s+admin|admin|boss|owner|supervisor|head\s+office|u_[a-z]+)\b",
+    # Text addressed to the AI, or to "whoever processes this".
+    r"(?:^|[\n.!?]\s*|\b(?:dear|hey|hi|hello)\s+)(?:ai|assistant|scribe|bot|chatbot|model)\s*[,:]",
+    r"\bto\s+whoever\s+(?:processes|reads|handles|is\s+processing)\s+this\b",
 ]
 
 
@@ -389,6 +397,12 @@ def route_proposal(p, *, rules: Rules, task: dict, scope_rows: dict, allowed: se
         if flag:
             flags.append(flag)
     # 6. Sensitivity is the server's call. The AI's label is only compared, never used.
+    if eff.sensitive and "pasted" in note["source"]:
+        # Pasted text is usually written by the customer: money and contact changes from it must be
+        # entered by staff directly (rule R2 then sends them to an approver). Depends on the source
+        # the client declares; pasted text labelled "typed" is not covered (D29).
+        return blocked("sensitive_from_pasted_text",
+                       f"{field} is sensitive and the note contains pasted text; enter this change directly")
     if eff.sensitive and suspicious:
         return blocked("suspected_injection",
                        "the note contains text aimed at the AI; sensitive proposals from it are not accepted")
@@ -455,6 +469,12 @@ def _accept_reply(cur, rules: Rules, task: dict, response, raw: str, elapsed: in
     tz = shop_time_zone(cur, shop_id)
     scope_rows = _resolve_scope(cur, shop_id, note["scope"])       # re-read: base values are current
     suspicious_hits = injection_signals(note["text"])
+    ai_flagged = [f for f in response["flags"] if "injection" in str(f.get("type", "")).lower()]
+    quarantine = []
+    if suspicious_hits:
+        quarantine.append("note contains text aimed at the AI: " + "; ".join(suspicious_hits))
+    if ai_flagged:
+        quarantine.append("the AI itself flagged suspected injection")   # trusted only to be stricter
     seen: set = set()
     routed = [route_proposal(p, rules=rules, task={"note": {"author_role": author_role}}, scope_rows=scope_rows,
                              allowed=allowed, note=note, tz=tz, suspicious=bool(suspicious_hits), seen=seen)
@@ -468,6 +488,17 @@ def _accept_reply(cur, rules: Rules, task: dict, response, raw: str, elapsed: in
     if hostile:
         task_flags.append({"type": "response_contained_hostile_output", "from": "server",
                            "detail": "some proposals tried to act outside the task; review the rest carefully"})
+    if quarantine:
+        # A contaminated note taints every proposal from it: nothing from this task can be approved.
+        # Proposals are kept (blocked, with the reason) and abstentions are stored as usual (D29).
+        why = "; ".join(quarantine)
+        task_flags.append({"type": "quarantined", "from": "server",
+                           "detail": f"every proposal from this task is blocked ({why}); enter genuine changes directly"})
+        for r in routed:
+            if r["status"] == "pending":
+                r.update(status="blocked", block_reasons=[f"quarantined: {why}"])
+            else:
+                r["block_reasons"] = r["block_reasons"] + [f"quarantined: {why}"]
     for r in routed:
         if hostile and r["status"] == "pending":
             r["flags"] = r["flags"] + ["response_contained_hostile_output"]

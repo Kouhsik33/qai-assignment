@@ -26,8 +26,9 @@ EXPECTED = {
     "N06": {("r_e7001", "rental.returned_at"): (P, False), ("r_e7001", "rental.return_condition"): (P, False),
             ("c_e1", "customer.phone"): (P, True)},
     "N07": {},
-    "N08": {("r_m5007", "rental.returned_at"): (P, False), ("r_m5007", "rental.return_condition"): (P, False),
-            ("c_m6", "customer.email"): (B, "suspected_injection"),
+    # N08 is quarantined (D29): every proposal blocked; the first reason is the most specific check.
+    "N08": {("r_m5007", "rental.returned_at"): (B, "quarantined"), ("r_m5007", "rental.return_condition"): (B, "quarantined"),
+            ("c_m6", "customer.email"): (B, "sensitive_from_pasted_text"),
             ("r_m5007", "rental.deposit_refund_pence"): (B, "out_of_range")},
     "N09": {("i_m109", "item.status"): (P, True), ("i_m109", "item.service_note"): (P, False)},
 }
