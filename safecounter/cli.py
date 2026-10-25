@@ -2,6 +2,7 @@
 
     python3 -m safecounter.cli note N01                      # send a data-pack note as its author
     python3 -m safecounter.cli note N01 --mode hang           # same, with a mock AI failure mode
+    python3 -m safecounter.cli note-text --as amira --id X1 --scope r_m5005 --text "..."   # your own note
     python3 -m safecounter.cli proposals --as chloe [--status pending]
     python3 -m safecounter.cli approve --as chloe --pick rental.deposit_refund_pence --reason "checked"
     python3 -m safecounter.cli approve 7 --as chloe --reason "..." --value 4
@@ -20,6 +21,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -75,14 +77,27 @@ def fmt_proposals(rows):
 
 
 def cmd_note(a):
-    n = NOTES[a.note_id]
+    if a.cmd == "note-text":
+        shop = shop_for(a.as_user, a.shop)
+        n = {"id": a.id, "shop_id": shop, "text": a.text, "scope": a.scope.split(","), "source": "typed",
+             "written_at": a.written_at, "author_id": f"u_{a.as_user}"}
+    else:
+        n = NOTES[a.note_id]
     user = a.as_user or n["author_id"].removeprefix("u_")
     body = {k: n[k] for k in ("id", "text", "written_at", "scope", "source")}
     print(f"→ {user} sends {n['id']} to {n['shop_id']}" + (f"  [AI mode: {a.mode}]" if a.mode else ""))
     print(f"  \"{n['text']}\"")
-    status, res = call("POST", f"/shops/{n['shop_id']}/notes", user, body, a.mode)
+    for _ in range(4):
+        status, res = call("POST", f"/shops/{n['shop_id']}/notes", user, body, a.mode)
+        if status == 503 and res.get("error") == "ai_rate_limited":
+            wait = float(res.get("retry_after_s") or 10) + 1
+            print(f"  … provider rate limit (nothing stored); retrying in {wait:.0f}s")
+            time.sleep(wait)
+            continue
+        break
     if status != 200:
         return show_error(status, res)
+    print(f"  AI: {res.get('provider')} / {res.get('model')} / prompt {res.get('prompt_version')}")
     print(f"  task {res['task_id']}  ({res['latency_ms']} ms)  allowed fields: {', '.join(res['allowed_fields'])}")
     for f in res["flags"]:
         print(f"  ⚑ {f['from']} flag {f['type']}: {f['detail']}")
@@ -192,6 +207,12 @@ def main(argv=None):
     p = with_user(sub.add_parser("note"), required=False)
     p.add_argument("note_id")
     p.add_argument("--mode")
+    p = with_user(sub.add_parser("note-text", help="send your own note text"))
+    p.add_argument("--id", required=True)
+    p.add_argument("--scope", required=True, help="comma-separated record ids")
+    p.add_argument("--text", required=True)
+    p.add_argument("--written-at", dest="written_at", default="2026-10-24T12:00:00+01:00")
+    p.add_argument("--mode")
     p = with_user(sub.add_parser("proposals"))
     p.add_argument("--status")
     for verb in ("approve", "reject"):
@@ -217,7 +238,7 @@ def main(argv=None):
     sub.add_parser("run-notes")
 
     a = ap.parse_args(argv)
-    if a.cmd == "note":
+    if a.cmd in ("note", "note-text"):
         return cmd_note(a)
     if a.cmd == "proposals":
         q = f"?status={a.status}" if a.status else ""
