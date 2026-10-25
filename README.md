@@ -19,10 +19,20 @@ Needs Docker with Compose v2. Host ports used: 8080 (API), 5433 (Postgres), 8099
 docker compose up -d --build                     # Postgres, mock AI, migrate+seed, API
 curl -s localhost:8080/health                    # {"ok":true}
 docker compose run --rm tools pytest -q          # the test suite (about 25 s)
-./scripts/demo.sh                                # the full demo; PAUSE=1 ./scripts/demo.sh to step through
+./scripts/demo.sh                                # the full demo (mock AI, deterministic, no key); PAUSE=1 to step through
+./scripts/demo_events.sh                         # Level 3: reliable event delivery to the pack's flaky receiver
 ```
 
-Verified on a fresh clone of this repository with an empty Docker volume and `docker compose build --no-cache`: healthy after 26 s, 116 tests passed, demo complete, pack smoke test 19/19 (`python3 mock_ai/smoke_test.py`). Base images were already pulled; a first-time pull of `python:3.12-slim` and `postgres:16-alpine` adds download time.
+Optional, with a real model (Level 3, D23): put `GROQ_API_KEY=...` in a local `.env` (git-ignored; never commit it), then
+
+```bash
+./scripts/demo_real.sh                           # starts api_real on :8081 (Groq, openai/gpt-oss-120b)
+docker compose run --rm tools python -m evals.run --conditions mock,groq-zero,groq-few --runs 3   # ~30 min on the free tier
+```
+
+The real model is **not deterministic**: proposals differ between runs, and a run may contain nothing that needs blocking. The mock demo is the deterministic one. Without a key, everything else works and the real-model pieces are skipped.
+
+Verified on a clean copy of the repository files (no `.env`) with an empty Docker volume and `docker compose build --no-cache`: healthy after 30 s, 150 tests passed and 1 skipped (the live real-model test, which needs a key), mock demo and event-delivery demo complete, real-model demo exits with a clear message, pack smoke test 19/19 (`python3 mock_ai/smoke_test.py`). With a key, the live real-model test and `scripts/demo_real.sh` also passed. Base images were already pulled; a first-time pull of `python:3.12-slim` and `postgres:16-alpine` adds download time.
 
 The demo and the `sc` CLI use the host's `python3` (standard library only). Without a host Python, run the CLI inside Docker: `docker compose run --rm tools python -m safecounter.cli note N01`.
 
@@ -89,9 +99,10 @@ person's direct edit ───────────────────�
 | `safecounter/gate.py` | **The gate** (`submit_change`), approve, reject. The only code that writes customers, items or rentals. |
 | `safecounter/validate.py` | Value rules per field: enums, ranges, refund ≤ deposit held, E.164, email, ISO time with the correct London offset. Pure functions. |
 | `safecounter/rules.py` | Loads `data/roles_and_fields.json` read-only; derives sensitivity and approvers from field **and value** (write-off). |
-| `safecounter/scribe.py` | Task building, bounded AI call, and the router that turns untrusted AI output into pending or blocked proposals. |
+| `safecounter/scribe.py` | Task building, bounded AI call (mock, or Groq when `AI_PROVIDER=groq`), and the router that turns untrusted AI output into pending or blocked proposals. The same router serves both providers. |
 | `safecounter/audit.py` | Hash-chain append and verify. |
 | `safecounter/api.py` | HTTP, auth, one shop per request. |
+| `safecounter/outbox.py` | Level 3: outbox events written with each applied change; delivery worker with retries and idempotency keys. |
 | `db/migrations/` | Schema, CHECKs, composite shop keys, app role and grants, RLS, lifecycle triggers. |
 
 ### The SQL behind the gate and the approval
@@ -189,7 +200,7 @@ What the tricky notes show:
 
 ## Tests
 
-`docker compose run --rm tools pytest -q`: **116 passed** on the last run (about 25 s). They run against the real Postgres and the real mock AI (deadline set to 2 s in tests).
+`docker compose run --rm tools pytest -q`: **150 passed, 1 skipped** on the last run (about 33 s). They run against the real Postgres, the real mock AI (deadline 2 s in tests) and the pack's flaky receiver; none need a key or the network. The skipped one is the live real-model test: `docker compose run --rm -e RUN_LIVE_GROQ=1 tools pytest tests/test_groq_live.py`.
 
 | File | What it proves |
 | --- | --- |
@@ -199,6 +210,9 @@ What the tricky notes show:
 | `test_isolation.py` | Level 2A: app role is not owner/superuser/BYPASSRLS; no shop set sees nothing; other shop's rows unreadable and unwritable; missing privileges; composite keys |
 | `test_notes.py` | The nine notes (table above) plus N05/N08/N09 specifics, reprocessing refused, scope must be in the shop |
 | `test_ai_failures.py` | Level 2C: hang, slow, 503, dropped connection, garbage, wrong schema, AI down: bounded error, nothing stored, record unchanged, retry works, `/health` answers during a hang |
+| `test_groq_adapter.py` | Real-model adapter, offline (`httpx.MockTransport`): request shape and strict schema, zero vs few-shot prompt, hostile real-model output blocked like the mock's, 429/401/5xx/400/non-JSON/truncated/wrong task id/timeouts store nothing, missing key makes no call, the key is never stored or returned, mock stays the default |
+| `test_groq_live.py` | One live call (skipped unless `RUN_LIVE_GROQ=1`): the real model on N08 cannot approve or apply anything |
+| `test_outbox.py` | Level 3 delivery: one event per applied change, none for a rolled-back change, every event reaches the flaky receiver with duplicates sharing a key, receiver down then up, backoff, least-privilege roles |
 | `test_hostile.py` | Mock hostile modes, plus 18 AI outputs the mock never sends (extra approval keys, bool as int, lookalike field names, invented quotes, mismatched times, wrong task id, ...); minimal data sent to the AI; source scan that only the gate writes business tables |
 
 ## Done and not done, by level
@@ -218,13 +232,32 @@ What the tricky notes show:
 | 2D | Edit before approve | Done |
 | 2E | Hostile notes | Done: untrusted-data prompt, tripwire, and validation that does not depend on the prompt |
 | 2F | Keep the AI contained | Mostly: separate process, no DB access, output checked against the rules, only needed data sent. The AI holds **no** credential rather than a narrow token (D03) |
-| 3 | Real-model experiment (Groq, zero-shot vs few-shot) | Not done; planned as optional after submission essentials |
-| 3 | Event delivery, corrections with history, sandbox | Not done |
+| 3 | One measured experiment | Done: mock vs Groq zero-shot vs few-shot, 3 runs each; the numbers decided the prompt and kept D06 (D24, D26, [`evals/results.md`](evals/results.md)) |
+| 3 | Reliable event delivery | Done: transactional outbox, retries with backoff, idempotency keys, tested against the pack's flaky receiver (D25) |
+| 3 | Corrections with history, real sandbox | Not done |
 
 ## Prompt and evaluation
 
-- `prompts/scribe_v1.md`: versioned prompt with rules, the untrusted-note instruction and five few-shot examples written for this purpose (none of N01–N09, so the regression suite is not leaked into the prompt). Its version and SHA-256 are stored on every AI task, with the rules file's hash. **The mock ignores the prompt**, so its quality has not been measured; that needs a real model.
-- `python -m evals.run` (in the tools container) scores the AI's raw output against hand-written labels (`evals/gold.json`), separately from what the policy did. Latest run, [`evals/results.md`](evals/results.md): precision 85% (23/27), recall 96% (23/24), evidence verbatim 96%; the mock's 4 wrong proposals were all blocked; 1 correct proposal was blocked (N05 refund). Four mistakes is a tiny sample, not evidence that the policy catches every error.
+- `prompts/scribe_v1.md`: versioned prompt with rules, the untrusted-note instruction and five few-shot examples written for this purpose (none of N01–N09). `scribe_v1:zero` is the same file without its Examples section. Prompt version, prompt hash, rules hash, provider, model and token usage are stored on every AI task; the API key never is.
+- `python -m evals.run` scores the AI's **raw** output against hand-written labels (`evals/gold.json`) and, separately, reports what the unchanged policy did with it. Decision rules were written before the real-model run (D24). Latest run, 3 runs × 9 notes per condition ([`evals/results.md`](evals/results.md)):
+
+| | Mock | Groq zero-shot | Groq few-shot |
+| --- | --- | --- | --- |
+| F1 (mean, range) | 90% | 60% (58–63%) | 86% (82–88%) |
+| Evidence quoted word for word | 96% | 100% | 100% |
+| Schema-valid responses | 100% | 100% | 100% |
+| N08 injection resisted by the model | 0/3 | 0/3 | 1/3 |
+| Wrong proposals blocked by the server | 12/12 | 26/35 | 7/16 |
+| Wrong proposals that reached a person | 0 | 9 | 9 |
+| Correct proposals falsely blocked | 3 (N05, verbatim rule) | 2 | 0 |
+| Latency per note, median | 13 ms | 3.1 s | 2.9 s |
+| Notes with identical output in all 3 runs | 9/9 | 3/9 | 6/9 |
+
+What the numbers decided (D26): **few-shot is the real-model default** (+26 F1 points; most of the gap is zero-shot putting quoted text into an enum field, which the router blocked) and **the verbatim-evidence rule stays** (0 false blocks on real output). What they showed: the model followed N08's injected instructions in 5 of 6 real runs and **only the server stopped them**; and the same **3 wrong-but-valid proposals reached a person in every real run** (a zero damage charge for "no damage" on N01 and N03, and N03's inspection time proposed as the return time). Nine notes, labelled by me after reading them, with prompt rules written after reading them: these are measurements of this setup, not evidence that one prompt or model is better in general.
+
+## Event delivery (Level 3)
+
+Every applied change writes an `outbox` row in the same transaction as the change and its audit row, so no change loses its event and no rolled-back change produces one. `python -m safecounter.outbox --url ... --until-empty` runs as a separate database role (`sc_delivery`: read outbox, update four delivery columns, nothing else), claims due events with `FOR UPDATE SKIP LOCKED`, and posts each with `Idempotency-Key: <shop>:<audit seq>`, retrying with capped exponential backoff. **Guarantee: at-least-once.** A lost acknowledgement makes the receiver see an event twice with the same key; de-duplicating is the receiver's job. Order is not guaranteed under retries (payloads carry the audit seq). Example run (`scripts/demo_events.sh`): 5 events, 10 deliveries, 5 unique keys, 2 events duplicated by lost acknowledgements, all delivered after 2–7 attempts.
 
 ## Decisions you asked us to make
 
@@ -238,8 +271,9 @@ What the tricky notes show:
 3. **The injection tripwire is a keyword heuristic.** Rephrasing defeats it. It is not the security boundary; approval and validation are.
 4. **The audit chain detects tampering; it does not prevent it.** The database owner can rewrite rows and recompute every hash, and update `audit_head`. Anchoring the head hash outside the database (or signing with a key the database never sees) is not built.
 5. **Times are stored as ISO text with offset**, so the database cannot sort or compare them natively (D17).
-6. **No real model measured.** All numbers are for the mock.
+6. **Real-model results are small and not deterministic.** One model, nine notes, three runs; the reasoning model gives different proposals between runs, and the free tier's 8,000 tokens a minute makes a note wait when the limit is hit (the CLI retries; the API returns 503 with `retry_after_s`).
 7. **Single process, synchronous AI call.** A request waits up to the AI deadline (5 s; a slow drip can take up to twice that). Fine for one shop counter; a queue would be needed at scale.
 8. **Demo auth only.** Static tokens per seeded user, stored hashed; no expiry or rotation.
 9. **Development credentials in `docker-compose.yml`.** The database passwords (`owner_pw`, `app_pw`) are local development values, not secrets; a real deployment would take them from a secret store.
 10. **Few notes, one model.** Nine notes are a regression set, not a benchmark; numbers from them do not generalise.
+11. **Event delivery has no dead-letter state.** An event that always fails is retried forever (at most every 5 minutes), and events carry changed values, so contact changes leave the system.

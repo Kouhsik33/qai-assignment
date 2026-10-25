@@ -78,3 +78,7 @@ Added at the end of the build. The design above is unchanged; this section recor
 3. *Integrity under concurrency or failure:* tested by the threaded double-approval test (15 of 15 repeated runs), audit rollback with the change, tamper/delete/truncate detection, and every mock failure mode. Still open: a database owner can rewrite the chain; there is no external anchor.
 
 **Not done:** the scribe as a separate worker holding a per-task token (D03), the gate as a database function (D02), external anchoring of audit heads, and any measurement of the prompt against a real model.
+
+**Level 3, added after the submission essentials**
+- **A real model behind the same door (D23, D24, D26).** Groq `openai/gpt-oss-120b` is an optional second provider. Its reply enters at the same point as the mock's and passes the same shape check, router, approval rules, gate, grants and audit; nothing else in the flow changed. The experiment chose few-shot over zero-shot and kept the verbatim-evidence rule, and it measured failure 2 directly: the same three wrong-but-valid proposals reached a person in every real run.
+- **Reliable event delivery (D25).** The gate now also writes an outbox row in the change's transaction; a worker with its own minimal role delivers it with retries and an idempotency key. At-least-once, not exactly-once.
