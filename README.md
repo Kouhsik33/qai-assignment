@@ -32,7 +32,7 @@ docker compose run --rm tools python -m evals.run --conditions mock,groq-zero,gr
 
 The real model is **not deterministic**: proposals differ between runs, and a run may contain nothing that needs blocking. The mock demo is the deterministic one. Without a key, everything else works and the real-model pieces are skipped.
 
-Verified on a clean copy of the repository files (no `.env`) with an empty Docker volume and `docker compose build --no-cache`: healthy after 30 s, 150 tests passed and 1 skipped (the live real-model test, which needs a key), mock demo and event-delivery demo complete, real-model demo exits with a clear message, pack smoke test 19/19 (`python3 mock_ai/smoke_test.py`). With a key, the live real-model test and `scripts/demo_real.sh` also passed. Base images were already pulled; a first-time pull of `python:3.12-slim` and `postgres:16-alpine` adds download time.
+Verified on a clean copy of the repository files (no `.env`) with an empty Docker volume and `docker compose build --no-cache`: healthy after 23 s, 162 tests passed and 1 skipped (the live real-model test, which needs a key), security-focused subset 139 passed, mock demo (through the scribe agent and task token) and event-delivery demo complete, real-model demo exits with a clear message, pack smoke test 19/19 (`python3 mock_ai/smoke_test.py`). With a key, the live real-model test and `scripts/demo_real.sh` also passed. Base images were already pulled; a first-time pull of `python:3.12-slim` and `postgres:16-alpine` adds download time.
 
 The demo and the `sc` CLI use the host's `python3` (standard library only). Without a host Python, run the CLI inside Docker: `docker compose run --rm tools python -m safecounter.cli note N01`.
 
@@ -79,12 +79,15 @@ docker compose run --rm migrate python -m safecounter.admin tamper shop_millbroo
 | `POST /shops/{shop}/proposals/{id}/reject` | `{"reason"}` |
 | `GET /shops/{shop}/records/{id}` | One customer, item or rental |
 | `GET /shops/{shop}/audit` and `/audit/verify` | Audit rows; first broken row |
+| `POST /ai/shops/{shop}/tasks/{task}/result` | The AI agent submits one task's result; accepts only that task's single-use token (Level 2F) |
 
 ## How it works
 
 ```
-note ──► task builder ──► mock AI (separate process, no DB, no credentials)
-            │ scope checked in this shop; only needed fields sent
+note ──► task builder ──► scribe agent ──► mock AI          (AI side: own processes, own network,
+            │ scope checked;      │  holds ONE task token          no DB credentials, no route to DB)
+            │ only needed fields  ▼
+            │            POST /ai/shops/{shop}/tasks/{task}/result   (the token's only use: once, this task, in time)
             ▼
          router: schema · scope · field allowlist · value rules · verbatim evidence · server sensitivity
             │
@@ -102,6 +105,7 @@ person's direct edit ───────────────────�
 | `safecounter/scribe.py` | Task building, bounded AI call (mock, or Groq when `AI_PROVIDER=groq`), and the router that turns untrusted AI output into pending or blocked proposals. The same router serves both providers. |
 | `safecounter/audit.py` | Hash-chain append and verify. |
 | `safecounter/api.py` | HTTP, auth, one shop per request. |
+| `safecounter/scribe_agent.py` | Level 2F: the AI-side process. Receives one task and one single-use token, calls the model, submits the reply to the one endpoint the token works on. No database credentials or network route. |
 | `safecounter/outbox.py` | Level 3: outbox events written with each applied change; delivery worker with retries and idempotency keys. |
 | `db/migrations/` | Schema, CHECKs, composite shop keys, app role and grants, RLS, lifecycle triggers. |
 
@@ -132,6 +136,10 @@ INSERT INTO audit_log (shop_id, seq, occurred_at, actor_id, action, entity, reco
                        old_value, new_value, proposal_id, detail, rules_sha256, prev_hash, row_hash)
 VALUES (...);                                 -- row_hash = sha256(canonical JSON incl. prev_hash)
 UPDATE audit_head SET last_seq = $5, last_hash = $6 WHERE shop_id = $2;
+
+-- event for other systems, same transaction (Level 3, D25): no change without its event
+INSERT INTO outbox (shop_id, event_id, kind, payload)
+VALUES ($2, 'shop_millbrook:' || $5, 'record.changed', $9);   -- event_id doubles as the idempotency key
 
 UPDATE proposals SET status = 'approved', final_value = $4, decided_by = $7,
        decided_at = now(), decision_reason = $8
@@ -200,7 +208,7 @@ What the tricky notes show:
 
 ## Tests
 
-`docker compose run --rm tools pytest -q`: **150 passed, 1 skipped** on the last run (about 33 s). They run against the real Postgres, the real mock AI (deadline 2 s in tests) and the pack's flaky receiver; none need a key or the network. The skipped one is the live real-model test: `docker compose run --rm -e RUN_LIVE_GROQ=1 tools pytest tests/test_groq_live.py`.
+`docker compose run --rm tools pytest -q`: **162 passed, 1 skipped** on the last run (about 40 s). They run against the real Postgres, the real mock AI (deadline 2 s in tests) and the pack's flaky receiver; none need a key or the network. The skipped one is the live real-model test: `docker compose run --rm -e RUN_LIVE_GROQ=1 tools pytest tests/test_groq_live.py`.
 
 | File | What it proves |
 | --- | --- |
@@ -212,6 +220,7 @@ What the tricky notes show:
 | `test_ai_failures.py` | Level 2C: hang, slow, 503, dropped connection, garbage, wrong schema, AI down: bounded error, nothing stored, record unchanged, retry works, `/health` answers during a hang |
 | `test_groq_adapter.py` | Real-model adapter, offline (`httpx.MockTransport`): request shape and strict schema, zero vs few-shot prompt, hostile real-model output blocked like the mock's, 429/401/5xx/400/non-JSON/truncated/wrong task id/timeouts store nothing, missing key makes no call, the key is never stored or returned, mock stays the default |
 | `test_groq_live.py` | One live call (skipped unless `RUN_LIVE_GROQ=1`): the real model on N08 cannot approve or apply anything |
+| `test_ai_token.py` | Level 2F, with a real uvicorn server and a real agent: the note flows through the task token; the token is single-use, bound to its task and shop, refused everywhere else (records, proposals, approve, changes, audit), and guessed, missing or staff tokens fail; a hostile reply sent with a valid token is still blocked; wrong shapes refused; agent-reported AI failures, a late reply after the deadline, and the agent being down are handled; Compose gives the agent no DB credentials and no DB network |
 | `test_outbox.py` | Level 3 delivery: one event per applied change, none for a rolled-back change, every event reaches the flaky receiver with duplicates sharing a key, receiver down then up, backoff, least-privilege roles |
 | `test_hostile.py` | Mock hostile modes, plus 18 AI outputs the mock never sends (extra approval keys, bool as int, lookalike field names, invented quotes, mismatched times, wrong task id, ...); minimal data sent to the AI; source scan that only the gate writes business tables |
 
@@ -231,7 +240,7 @@ What the tricky notes show:
 | 2C | AI failure | Done |
 | 2D | Edit before approve | Done |
 | 2E | Hostile notes | Done: untrusted-data prompt, tripwire, and validation that does not depend on the prompt |
-| 2F | Keep the AI contained | Mostly: separate process, no DB access, output checked against the rules, only needed data sent. The AI holds **no** credential rather than a narrow token (D03) |
+| 2F | Keep the AI contained | Done: the scribe agent is a separate process on a network without Postgres and with no DB credentials; it holds one single-use token per task that can only submit that task's proposals (D27); its output is checked by the same router; only needed data is sent. The optional Groq service and in-process tests use the direct path, where the AI holds no credential |
 | 3 | One measured experiment | Done: mock vs Groq zero-shot vs few-shot, 3 runs each; the numbers decided the prompt and kept D06 (D24, D26, [`evals/results.md`](evals/results.md)) |
 | 3 | Reliable event delivery | Done: transactional outbox, retries with backoff, idempotency keys, tested against the pack's flaky receiver (D25) |
 | 3 | Corrections with history, real sandbox | Not done |
@@ -277,3 +286,4 @@ Every applied change writes an `outbox` row in the same transaction as the chang
 9. **Development credentials in `docker-compose.yml`.** The database passwords (`owner_pw`, `app_pw`) are local development values, not secrets; a real deployment would take them from a secret store.
 10. **Few notes, one model.** Nine notes are a regression set, not a benchmark; numbers from them do not generalise.
 11. **Event delivery has no dead-letter state.** An event that always fails is retried forever (at most every 5 minutes), and events carry changed values, so contact changes leave the system.
+12. **Two AI transports.** The main API uses the scribe agent and task token; in-process tests and the optional Groq service use the direct path (the AI holds no credential there). The API waits for the agent's result by polling the task row every 100 ms within the deadline.

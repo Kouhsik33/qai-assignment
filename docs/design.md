@@ -57,28 +57,11 @@ The AI is a separate process (the supplied mock, or a compatible model) reached 
 
 ## What changed and why
 
-Added at the end of the build. The design above is unchanged; this section records where the build went further, changed course, or stopped short. Decision numbers refer to `docs/decisions.md`.
+Added at the end of the build; the design above is unchanged. Decision numbers refer to `docs/decisions.md`.
 
-**Built as designed:** one gate, server-derived sensitivity, per-proposal routing, the AI as a separate process with no database access or credentials, the restricted app role with RLS and column-level grants, per-shop hash chains with a locked head, synchronous AI call with no transaction open.
-
-**Added during the build**
-- **Database-enforced proposal lifecycle.** A trigger allows proposals to be created only as pending or blocked, lets only pending ones change, requires who, when and why, and refuses a decision by the requester (R4), so rule R5 holds even for a direct SQL update by the app role.
-- **Stale-proposal check (D20).** Each proposal stores the value it was based on; approval is refused if the record changed since. Needed because AI values such as hire_days are derived from the current value.
-- **Evidence must agree with the value (D21).** A verbatim quote is not enough: money amounts, clock times and phone digits in the evidence must match the value, and any non-GBP currency blocks. This is what catches N04's 12000p from "120 euros", which the range check alone lets through.
-- **Edit-before-approve re-derives sensitivity** from the corrected value, so correcting "available" to "retired" turns it into a write-off that only an area admin can approve.
-
-**Changed**
-- **Times are stored as ISO text with offset (D17),** not `timestamptz`, because the brief asks to keep the offset and the audit hash must cover exactly what is stored.
-- **Failed AI calls keep the note and a failed task row (D19).** "Nothing saved" is read as no proposals and no business changes.
-- **Rejection needs the same authority as approval (D18).**
-
-**What the three failures turned into**
-1. *Unauthorised change:* tested by role, value-rule, scope, hostile-output and privilege tests, plus a source scan that only the gate writes business tables. Still open: the gate is enforced by code structure, not by the database alone (D02).
-2. *Plausible but wrong proposal approved:* the router blocked all 4 of the mock's wrong proposals, at the cost of 1 false block (N05's paraphrased refund). Still open, and the main residual risk: a semantically wrong proposal that passes every rule reaches a person.
-3. *Integrity under concurrency or failure:* tested by the threaded double-approval test (15 of 15 repeated runs), audit rollback with the change, tamper/delete/truncate detection, and every mock failure mode. Still open: a database owner can rewrite the chain; there is no external anchor.
-
-**Not done:** the scribe as a separate worker holding a per-task token (D03), the gate as a database function (D02), external anchoring of audit heads, and any measurement of the prompt against a real model.
-
-**Level 3, added after the submission essentials**
-- **A real model behind the same door (D23, D24, D26).** Groq `openai/gpt-oss-120b` is an optional second provider. Its reply enters at the same point as the mock's and passes the same shape check, router, approval rules, gate, grants and audit; nothing else in the flow changed. The experiment chose few-shot over zero-shot and kept the verbatim-evidence rule, and it measured failure 2 directly: the same three wrong-but-valid proposals reached a person in every real run.
-- **Reliable event delivery (D25).** The gate now also writes an outbox row in the change's transaction; a worker with its own minimal role delivers it with retries and an idempotency key. At-least-once, not exactly-once.
+- **Held up as designed:** one gate, server-derived sensitivity, per-proposal routing, restricted app role with RLS and column grants, per-shop hash chains, no transaction open during the AI call.
+- **Added:** a database trigger for the proposal lifecycle (R4, R5 hold even for direct SQL); a stale-proposal check (D20); evidence that must agree with the value (D21), which is what catches N04's euros; re-deriving sensitivity when an approver edits a value.
+- **Changed:** times stored as ISO text with offset (D17); a failed AI call keeps the note and a failed task row (D19); rejecting needs approver authority (D18).
+- **The AI now holds one narrow token (D27).** Originally the API called the AI and the AI held no credential (D03). To meet Level 2F as written, a separate scribe agent, on a network without Postgres, receives one task and a single-use token whose only use is submitting that task's proposals, through the same router.
+- **Level 3:** an optional real model behind the same door (D23, D26), and transactional-outbox event delivery (D25).
+- **The three failures, as built:** (1) unauthorised change: covered by tests, but "only the gate writes" is still enforced by code, not by the database (D02); (2) plausible but wrong proposal: measured, not solved; the same three wrong-but-valid proposals reached a person in every real-model run; (3) integrity under concurrency or failure: covered by tests; a database owner can still rewrite the audit chain, which has no external anchor.
