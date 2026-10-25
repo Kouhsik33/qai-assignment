@@ -19,7 +19,7 @@ from psycopg.rows import dict_row
 from . import audit, config
 
 MIGRATIONS = config.ROOT / "db" / "migrations"
-ALL_TABLES = ["audit_log", "audit_head", "abstentions", "proposals", "ai_tasks", "notes",
+ALL_TABLES = ["outbox", "audit_log", "audit_head", "abstentions", "proposals", "ai_tasks", "notes",
               "rentals", "items", "customers", "memberships", "staff", "shops"]
 
 
@@ -43,6 +43,9 @@ def migrate(conn):
                 cur.execute("INSERT INTO schema_migrations (name) VALUES (%s)", (path.name,))
                 print(f"applied {path.name}")
         cur.execute(sql.SQL("ALTER ROLE sc_app PASSWORD {}").format(sql.Literal(config.APP_DB_PASSWORD)))
+        cur.execute("SELECT 1 FROM pg_roles WHERE rolname = 'sc_delivery'")
+        if cur.fetchone():
+            cur.execute(sql.SQL("ALTER ROLE sc_delivery PASSWORD {}").format(sql.Literal(config.DELIVERY_DB_PASSWORD)))
     conn.commit()
 
 

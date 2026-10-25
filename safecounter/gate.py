@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from psycopg import sql
 
-from . import audit
+from . import audit, outbox
 from .rules import Rules
 from .validate import Invalid, check_value
 
@@ -143,6 +143,7 @@ def submit_change(cur, actor: Actor, rules: Rules, *, record_id: str, field: str
         cur, shop_id=actor.shop_id, time_zone=tz, actor_id=actor.staff_id, action="change_applied",
         entity=rule.entity, record_id=record_id, field=field, old_value=old_value, new_value=new_value,
         proposal_id=proposal_id, detail=detail, rules_sha256=rules.sha256)
+    outbox.enqueue(cur, shop_id=actor.shop_id, entry=entry)     # same transaction: no lost events
 
     if approving is not None:
         cur.execute(
