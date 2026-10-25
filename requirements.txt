@@ -5,3 +5,4 @@ psycopg-pool==3.2.4
 httpx==0.28.1
 jsonschema==4.23.0
 pytest==8.3.4
+pyyaml==6.0.2

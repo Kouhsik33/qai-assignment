@@ -1,6 +1,8 @@
-# Safe Counter: Postgres, the mock AI, a one-shot migrator, and the API.
+# Safe Counter: Postgres, the mock AI, the scribe agent, a one-shot migrator, and the API.
 # The API container holds only the restricted app credentials (sc_app).
 # Owner credentials live only in the migrate and tools containers.
+# Two networks: Postgres is on "backend" only; the AI side (mock_ai, scribe_agent) is on
+# "ai" only, so the AI cannot even reach the database port (Level 2F, D27).
 
 x-owner-env: &owner-env
   OWNER_DATABASE_URL: postgresql://sc_owner:owner_pw@db:5432/safecounter
@@ -12,6 +14,10 @@ x-app-env: &app-env
   AI_DEADLINE_SECONDS: "5"
   ALLOW_AI_MODE_OVERRIDE: "1"
 
+networks:
+  backend: {}
+  ai: {}
+
 services:
   db:
     image: postgres:16-alpine
@@ -20,6 +26,7 @@ services:
       POSTGRES_PASSWORD: owner_pw
       POSTGRES_DB: safecounter
     ports: ["5433:5432"]
+    networks: [backend]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sc_owner -d safecounter"]
       interval: 2s
@@ -34,24 +41,46 @@ services:
       MOCK_PORT: "8099"
     volumes: ["./mock_ai:/mock:ro"]
     ports: ["8099:8099"]
+    networks: [ai]
+
+  # The AI process: calls the model, submits results with a single-use task token.
+  # No database credentials and no route to the database.
+  scribe_agent:
+    build: .
+    command: ["python", "-m", "safecounter.scribe_agent"]
+    environment:
+      AI_URL: http://mock_ai:8099/v1/propose
+      AI_DEADLINE_SECONDS: "5"
+      SCRIBE_AGENT_HOST: 0.0.0.0
+      SCRIBE_AGENT_PORT: "8097"
+    volumes: [".:/app"]
+    networks: [ai]
+    depends_on:
+      mock_ai: {condition: service_started}
 
   migrate:
     build: .
     command: ["python", "-m", "safecounter.admin", "init"]
     environment: *owner-env
     volumes: [".:/app"]
+    networks: [backend]
     depends_on:
       db: {condition: service_healthy}
 
   api:
     build: .
     command: ["uvicorn", "safecounter.api:app", "--host", "0.0.0.0", "--port", "8000"]
-    environment: *app-env
+    environment:
+      <<: *app-env
+      AI_TRANSPORT: agent
+      SCRIBE_AGENT_URL: http://scribe_agent:8097/tasks
+      CALLBACK_BASE_URL: http://api:8000
     volumes: [".:/app"]
     ports: ["8080:8000"]
+    networks: [backend, ai]
     depends_on:
       migrate: {condition: service_completed_successfully}
-      mock_ai: {condition: service_started}
+      scribe_agent: {condition: service_started}
 
   # Optional real-model API (D23): docker compose --profile real up -d api_real
   # Reads GROQ_API_KEY from the local, git-ignored .env. Same restricted DB role.
@@ -68,6 +97,7 @@ services:
         required: false
     volumes: [".:/app"]
     ports: ["8081:8000"]
+    networks: [backend, ai]
     depends_on:
       migrate: {condition: service_completed_successfully}
 
@@ -85,6 +115,7 @@ services:
       SC_API: http://api:8000
       DELIVERY_DATABASE_URL: postgresql://sc_delivery:delivery_pw@db:5432/safecounter
     volumes: [".:/app"]
+    networks: [backend, ai]
     depends_on:
       db: {condition: service_healthy}
       mock_ai: {condition: service_started}

@@ -30,4 +30,12 @@ GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")               # from the local .env only; never logged
 GROQ_DEADLINE_SECONDS = float(os.environ.get("GROQ_DEADLINE_SECONDS", "30"))
 
+# How the AI is reached (D27). "direct": the API calls the model and reads the reply.
+# "agent": a separate scribe agent (no DB access) calls the model and submits the reply
+# with a single-use, proposal-only task token.
+AI_TRANSPORT = os.environ.get("AI_TRANSPORT", "direct")
+SCRIBE_AGENT_URL = os.environ.get("SCRIBE_AGENT_URL", "http://localhost:8097/tasks")
+CALLBACK_BASE_URL = os.environ.get("CALLBACK_BASE_URL", "http://localhost:8080")
+AGENT_MARGIN_SECONDS = float(os.environ.get("AGENT_MARGIN_SECONDS", "2"))
+
 LOW_CONFIDENCE = 0.7

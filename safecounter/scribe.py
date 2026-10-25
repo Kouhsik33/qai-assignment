@@ -11,8 +11,10 @@ sensitivity, shops or permissions is used. See `route_proposal` for the checks.
 
 import copy
 import hashlib
+import hmac
 import json
 import re
+import secrets
 import time
 import uuid
 from datetime import datetime
@@ -406,13 +408,105 @@ def route_proposal(p, *, rules: Rules, task: dict, scope_rows: dict, allowed: se
 
 
 # --- The whole flow ----------------------------------------------------------------
+# Failure kinds an agent may report; anything else is recorded as "agent_error".
+AGENT_ERROR_KINDS = {"timeout", "unavailable", "connection_dropped", "bad_status", "invalid_json", "too_large",
+                     "rate_limited", "auth_failed", "wrong_schema", "truncated", "not_configured"}
+AGENT_META_KEYS = {"provider", "model", "usage", "request_id", "finish_reason"}
+
+
+def _ai_gate_error(exc: AIError, task_id: str, provider: str) -> GateError:
+    status = {"timeout": 504, "rate_limited": 503, "not_configured": 503}.get(exc.kind, 502)
+    extra = {"retry_after_s": exc.retry_after} if exc.retry_after is not None else {}
+    return GateError(status, f"ai_{exc.kind}", f"{exc.detail}. No proposals were stored and no records were changed.",
+                     task_id=task_id, elapsed_ms=exc.elapsed_ms, provider=provider, **extra)
+
+
+def _mark_failed(cur, task_id: str, exc: AIError, meta: dict) -> bool:
+    cur.execute("""UPDATE ai_tasks SET status = 'failed', error_kind = %s, error_detail = %s,
+                          finished_at = now(), latency_ms = %s, ai_meta = %s
+                   WHERE id = %s AND status = 'running'""",
+                (exc.kind, exc.detail, exc.elapsed_ms, Jsonb(meta), task_id))
+    return cur.rowcount == 1
+
+
+def _accept_reply(cur, rules: Rules, task: dict, response, raw: str, elapsed: int, meta: dict) -> AIError | None:
+    """tx2, the same for both transports: check the reply's shape, route every proposal, store.
+
+    `task` is the ai_tasks row, locked by the caller. Returns an AIError (and marks the task
+    failed) if the reply is unusable; otherwise stores proposals and abstentions.
+    """
+    task_id, shop_id = task["id"], task["shop_id"]
+    shape_errors = sorted(e.message for e in TOP_VALIDATOR.iter_errors(response))
+    problem = None
+    if shape_errors:
+        problem = AIError("wrong_schema", "; ".join(shape_errors)[:300], elapsed)
+    elif response["task_id"] != task_id:
+        problem = AIError("task_mismatch", f"response is for task {response['task_id']!r}, not {task_id}", elapsed)
+    if problem:
+        _mark_failed(cur, task_id, problem, meta)
+        return problem
+
+    cur.execute("SELECT * FROM notes WHERE shop_id = %s AND id = %s", (shop_id, task["note_id"]))
+    n = cur.fetchone()
+    note = {"id": n["id"], "text": n["text"], "scope": list(n["scope"]), "source": n["source"],
+            "written_at": n["written_at"]}
+    author_role = task["request"]["note"]["author_role"]
+    allowed = set(task["request"]["allowed_fields"])
+    tz = shop_time_zone(cur, shop_id)
+    scope_rows = _resolve_scope(cur, shop_id, note["scope"])       # re-read: base values are current
+    suspicious_hits = injection_signals(note["text"])
+    seen: set = set()
+    routed = [route_proposal(p, rules=rules, task={"note": {"author_role": author_role}}, scope_rows=scope_rows,
+                             allowed=allowed, note=note, tz=tz, suspicious=bool(suspicious_hits), seen=seen)
+              for p in response["proposals"]]
+    hostile = any(r["status"] == "blocked" and r["block_reasons"][0].split(":")[0] in HOSTILE_CODES for r in routed)
+    task_flags = [{"type": str(f["type"])[:60], "detail": str(f["detail"])[:300], "from": "ai"}
+                  for f in response["flags"]]
+    if suspicious_hits:
+        task_flags.append({"type": "suspected_injection", "from": "server",
+                           "detail": "note contains text aimed at the AI: " + "; ".join(suspicious_hits)})
+    if hostile:
+        task_flags.append({"type": "response_contained_hostile_output", "from": "server",
+                           "detail": "some proposals tried to act outside the task; review the rest carefully"})
+    for r in routed:
+        if hostile and r["status"] == "pending":
+            r["flags"] = r["flags"] + ["response_contained_hostile_output"]
+        insert_proposal(cur, shop_id=shop_id, origin="ai", task_id=task_id, **r)
+    for a in response["abstentions"]:
+        cur.execute("INSERT INTO abstentions (shop_id, task_id, record_id, field, reason) VALUES (%s,%s,%s,%s,%s)",
+                    (shop_id, task_id, a["record_id"][:100], a["field"][:100], a["reason"][:500]))
+    cur.execute("""UPDATE ai_tasks SET status = 'succeeded', response_raw = %s, flags = %s,
+                          finished_at = now(), latency_ms = %s, ai_meta = %s WHERE id = %s""",
+                (raw[:65536], Jsonb(task_flags), elapsed, Jsonb(meta), task_id))
+    return None
+
+
+def task_summary(cur, task_id: str) -> dict:
+    cur.execute("SELECT * FROM ai_tasks WHERE id = %s", (task_id,))
+    t = cur.fetchone()
+    cur.execute("""SELECT id, record_id, field, value, status, sensitive, approver_roles, confidence, evidence,
+                          block_reasons, flags FROM proposals WHERE task_id = %s ORDER BY id""", (task_id,))
+    proposals = [{**r, "confidence": float(r["confidence"]) if r["confidence"] is not None else None}
+                 for r in cur.fetchall()]
+    cur.execute("SELECT record_id, field, reason FROM abstentions WHERE task_id = %s ORDER BY id", (task_id,))
+    return {"task_id": task_id, "note_id": t["note_id"], "provider": t["provider"],
+            "model": t["ai_meta"].get("model", t["model"]), "prompt_version": t["prompt_version"],
+            "transport": t["request"].get("transport", "direct"), "allowed_fields": t["request"]["allowed_fields"],
+            "latency_ms": t["latency_ms"], "flags": t["flags"], "proposals": proposals,
+            "abstentions": cur.fetchall()}
+
+
 def run_note(actor: Actor, rules: Rules, body: dict, ai_mode: str | None = None) -> dict:
     variant = config.AI_PROMPT_VARIANT
     prompt_text, prompt_sha = load_prompt(variant)
     provider = config.AI_PROVIDER
+    transport = config.AI_TRANSPORT
     model = config.GROQ_MODEL if provider == "groq" else "mock"
     if provider != "mock":
         ai_mode = None                      # failure/hostile modes exist only in the mock
+    model_deadline = config.GROQ_DEADLINE_SECONDS if provider == "groq" else config.AI_DEADLINE_SECONDS
+    wait = model_deadline + config.AGENT_MARGIN_SECONDS
+    token = secrets.token_urlsafe(32) if transport == "agent" else None
 
     # tx1: note, scope, task.
     with shop_tx(actor.shop_id) as cur:
@@ -449,74 +543,110 @@ def run_note(actor: Actor, rules: Rules, body: dict, ai_mode: str | None = None)
             "prompt_version": f"{PROMPT_VERSION}:{variant}",
             "system_prompt": prompt_text,
         }
+        stored_request = {k: v for k, v in request.items() if k != "system_prompt"} | {"transport": transport}
         cur.execute("""INSERT INTO ai_tasks (id, shop_id, note_id, status, prompt_version, prompt_sha256,
-                                             rules_sha256, ai_mode, request, provider, model)
-                       VALUES (%s, %s, %s, 'running', %s, %s, %s, %s, %s, %s, %s)""",
+                                             rules_sha256, ai_mode, request, provider, model,
+                                             token_sha256, token_expires_at)
+                       VALUES (%s, %s, %s, 'running', %s, %s, %s, %s, %s, %s, %s, %s,
+                               now() + make_interval(secs => %s))""",
                     (task_id, actor.shop_id, note["id"], request["prompt_version"], prompt_sha, rules.sha256,
-                     ai_mode, Jsonb({k: v for k, v in request.items() if k != "system_prompt"}), provider, model))
+                     ai_mode, Jsonb(stored_request), provider, model,
+                     hashlib.sha256(token.encode()).hexdigest() if token else None, wait))
 
-    # The AI call: no transaction open.
-    meta: dict = {}
-    try:
-        response, raw, elapsed = call_ai(request, ai_mode, meta)
-        problem = None
-        shape_errors = sorted(e.message for e in TOP_VALIDATOR.iter_errors(response))
-        if shape_errors:
-            problem = AIError("wrong_schema", "; ".join(shape_errors)[:300], elapsed)
-        elif response["task_id"] != task_id:
-            problem = AIError("task_mismatch", f"response is for task {response['task_id']!r}, not {task_id}", elapsed)
-        if problem:
-            raise problem
-    except AIError as exc:
+    if transport == "agent":
+        _run_via_agent(actor.shop_id, task_id, request, token, ai_mode, provider, wait)
+    else:
+        # The AI call: no transaction open.
+        meta: dict = {}
+        try:
+            response, raw, elapsed = call_ai(request, ai_mode, meta)
+        except AIError as exc:
+            with shop_tx(actor.shop_id) as cur:
+                _mark_failed(cur, task_id, exc, meta)
+            raise _ai_gate_error(exc, task_id, provider)
         with shop_tx(actor.shop_id) as cur:
-            cur.execute("""UPDATE ai_tasks SET status = 'failed', error_kind = %s, error_detail = %s,
-                                  finished_at = now(), latency_ms = %s, ai_meta = %s WHERE id = %s""",
-                        (exc.kind, exc.detail, exc.elapsed_ms, Jsonb(meta), task_id))
-        status = {"timeout": 504, "rate_limited": 503, "not_configured": 503}.get(exc.kind, 502)
-        extra = {"retry_after_s": exc.retry_after} if exc.retry_after is not None else {}
-        raise GateError(status, f"ai_{exc.kind}",
-                        f"{exc.detail}. No proposals were stored and no records were changed.",
-                        task_id=task_id, elapsed_ms=exc.elapsed_ms, provider=provider, **extra)
+            cur.execute("SELECT * FROM ai_tasks WHERE id = %s FOR UPDATE", (task_id,))
+            problem = _accept_reply(cur, rules, cur.fetchone(), response, raw, elapsed, meta)
+        if problem:
+            raise _ai_gate_error(problem, task_id, provider)
 
-    # tx2: route and store. Scope rows are re-read so base values are current.
     with shop_tx(actor.shop_id) as cur:
-        scope_rows = _resolve_scope(cur, actor.shop_id, note["scope"])
-        suspicious_hits = injection_signals(note["text"])
-        task_ctx = {"note": {"author_role": author_role}}
-        seen: set = set()
-        routed = [route_proposal(p, rules=rules, task=task_ctx, scope_rows=scope_rows, allowed=set(allowed),
-                                 note=note, tz=tz, suspicious=bool(suspicious_hits), seen=seen)
-                  for p in response["proposals"]]
-        hostile = any(r["status"] == "blocked" and r["block_reasons"][0].split(":")[0] in HOSTILE_CODES
-                      for r in routed)
-        task_flags = [{"type": str(f["type"])[:60], "detail": str(f["detail"])[:300], "from": "ai"}
-                      for f in response["flags"]]
-        if suspicious_hits:
-            task_flags.append({"type": "suspected_injection", "from": "server",
-                               "detail": "note contains text aimed at the AI: " + "; ".join(suspicious_hits)})
-        if hostile:
-            task_flags.append({"type": "response_contained_hostile_output", "from": "server",
-                               "detail": "some proposals tried to act outside the task; review the rest carefully"})
-        stored = []
-        for r in routed:
-            if hostile and r["status"] == "pending":
-                r["flags"] = r["flags"] + ["response_contained_hostile_output"]
-            pid = insert_proposal(cur, shop_id=actor.shop_id, origin="ai", task_id=task_id, **r)
-            stored.append({"id": pid, "record_id": r["record_id"], "field": r["field"],
-                           "value": r["value"].obj if isinstance(r.get("value"), Jsonb) else None,
-                           "status": r["status"], "sensitive": r.get("sensitive"),
-                           "approver_roles": r.get("approver_roles"), "confidence": r.get("confidence"),
-                           "evidence": r.get("evidence"), "block_reasons": r["block_reasons"],
-                           "flags": r.get("flags", [])})
-        abstentions = []
-        for a in response["abstentions"]:
-            cur.execute("INSERT INTO abstentions (shop_id, task_id, record_id, field, reason) VALUES (%s,%s,%s,%s,%s)",
-                        (actor.shop_id, task_id, a["record_id"][:100], a["field"][:100], a["reason"][:500]))
-            abstentions.append(a)
-        cur.execute("""UPDATE ai_tasks SET status = 'succeeded', response_raw = %s, flags = %s,
-                              finished_at = now(), latency_ms = %s, ai_meta = %s WHERE id = %s""",
-                    (raw[:65536], Jsonb(task_flags), elapsed, Jsonb(meta), task_id))
+        return task_summary(cur, task_id)
 
-    return {"task_id": task_id, "note_id": note["id"], "provider": provider, "model": meta.get("model", model),
-            "prompt_version": request["prompt_version"], "allowed_fields": allowed, "latency_ms": elapsed,
-            "flags": task_flags, "proposals": stored, "abstentions": abstentions}
+
+# --- Agent transport (Level 2F, D27) -------------------------------------------------------
+def _run_via_agent(shop_id: str, task_id: str, request: dict, token: str, ai_mode, provider: str, wait: float):
+    """Hand the task and its token to the scribe agent, then wait for the agent to submit
+    the result through accept_agent_result. The API does not keep the token."""
+    start = time.monotonic()
+    envelope = {"task": request, "token": token, "mode": ai_mode,
+                "result_url": f"{config.CALLBACK_BASE_URL}/ai/shops/{shop_id}/tasks/{task_id}/result"}
+    try:
+        status, _, _, _ = _post(config.SCRIBE_AGENT_URL, envelope, limit=2.0)
+        if status != 202:
+            raise AIError("unavailable", f"scribe agent answered HTTP {status}")
+    except AIError as exc:
+        failure = AIError("unavailable", f"could not hand the task to the scribe agent ({exc.detail})",
+                          int((time.monotonic() - start) * 1000))
+        with shop_tx(shop_id) as cur:
+            _mark_failed(cur, task_id, failure, {})
+        raise _ai_gate_error(failure, task_id, provider)
+    del envelope, token
+
+    while True:
+        with shop_tx(shop_id) as cur:
+            cur.execute("SELECT status, error_kind, error_detail, latency_ms, ai_meta FROM ai_tasks WHERE id = %s",
+                        (task_id,))
+            t = cur.fetchone()
+            if t["status"] == "running" and time.monotonic() - start > wait:
+                timeout = AIError("timeout", f"no result from the AI within {wait:g}s",
+                                  int((time.monotonic() - start) * 1000))
+                if _mark_failed(cur, task_id, timeout, {}):
+                    t = {"status": "failed", "error_kind": "timeout", "error_detail": timeout.detail,
+                         "latency_ms": timeout.elapsed_ms, "ai_meta": {}}
+        if t["status"] != "running":
+            break
+        time.sleep(0.1)
+    if t["status"] == "failed":
+        raise _ai_gate_error(AIError(t["error_kind"], t["error_detail"], t["latency_ms"] or 0,
+                                     retry_after=(t["ai_meta"] or {}).get("retry_after")), task_id, provider)
+
+
+def accept_agent_result(rules: Rules, shop_id: str, task_id: str, token: str, body) -> dict:
+    """The one thing a task token can do: submit the result for its own task, once, in time.
+
+    Everything else about the reply is checked exactly as in the direct path (_accept_reply).
+    """
+    digest = hashlib.sha256(token.encode()).hexdigest() if token else ""
+    late = False
+    with shop_tx(shop_id) as cur:
+        cur.execute("SELECT *, now() > token_expires_at AS expired FROM ai_tasks WHERE id = %s AND shop_id = %s "
+                    "FOR UPDATE", (task_id, shop_id))
+        task = cur.fetchone()
+        if task is None or not task["token_sha256"] or not hmac.compare_digest(task["token_sha256"], digest):
+            raise GateError(401, "invalid_task_token", "this token is not valid for this task")
+        if task["status"] != "running":
+            raise GateError(409, "task_closed", f"task {task_id} is {task['status']}; its token can no longer be used")
+        if not isinstance(body, dict):
+            raise GateError(422, "bad_result", "result must be a JSON object")
+        elapsed = body.get("elapsed_ms") if type(body.get("elapsed_ms")) is int else 0
+        meta = {k: v for k, v in (body.get("meta") or {}).items() if k in AGENT_META_KEYS} \
+            if isinstance(body.get("meta"), dict) else {}
+        if task["expired"]:
+            _mark_failed(cur, task_id, AIError("timeout", "result arrived after the task's deadline", elapsed), meta)
+            late = True
+        elif "error" in body:
+            err = body["error"] if isinstance(body["error"], dict) else {}
+            kind = err.get("kind") if err.get("kind") in AGENT_ERROR_KINDS else "agent_error"
+            retry = err.get("retry_after") if isinstance(err.get("retry_after"), (int, float)) else None
+            if retry is not None:
+                meta["retry_after"] = retry
+            _mark_failed(cur, task_id, AIError(kind, str(err.get("detail", ""))[:300], elapsed), meta)
+            outcome = {"accepted": False, "failure_recorded": kind}
+        else:
+            reply = body.get("reply")
+            problem = _accept_reply(cur, rules, task, reply, json.dumps(reply)[:65536], elapsed, meta)
+            outcome = {"accepted": problem is None} | ({"error": f"ai_{problem.kind}"} if problem else {})
+    if late:
+        raise GateError(409, "task_expired", f"task {task_id} passed its deadline; the result was not accepted")
+    return outcome

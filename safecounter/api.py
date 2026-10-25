@@ -8,7 +8,7 @@ role comes from that membership, never from the request body.
 import hashlib
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, Request
+from fastapi import Body, Depends, FastAPI, Header, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -115,6 +115,15 @@ def get_record(record_id: str, actor: Actor = Depends(current_actor)):
                     row.pop("id_check_ref", None)   # ID-check references are area-admin business
                 return {"type": entity, **row}
     raise GateError(404, "record_not_found", f"no record {record_id} in {actor.shop_id}")
+
+
+@app.post("/ai/shops/{shop_id}/tasks/{task_id}/result")
+def ai_task_result(shop_id: str, task_id: str, result: Any = Body(...),
+                   authorization: str | None = Header(default=None)):
+    """The only endpoint an AI task token works on (Level 2F, D27). Staff tokens do not work here,
+    and task tokens do not work anywhere else."""
+    token = authorization.removeprefix("Bearer ").strip() if authorization and authorization.startswith("Bearer ") else ""
+    return scribe.accept_agent_result(rules_mod.load(), shop_id, task_id, token, result)
 
 
 @app.get("/shops/{shop_id}/audit")
