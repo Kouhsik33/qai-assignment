@@ -57,7 +57,7 @@ def test_hostile_output_keeps_only_the_ordinary_proposal(client):
 
 # --- Part 2: AI output the mock never sends ----------------------------------------
 def fake_ai(monkeypatch, proposals, **top):
-    def call(request, mode=None):
+    def call(request, mode=None, meta=None):
         resp = {"task_id": request["task_id"], "proposals": proposals, "abstentions": [], "flags": [], **top}
         return resp, "{}", 5
     monkeypatch.setattr(scribe, "call_ai", call)
@@ -133,7 +133,7 @@ def test_unseen_hostile_top_level(client, monkeypatch, top, code):
 def test_ai_request_carries_only_what_the_task_needs(client, monkeypatch):
     seen = {}
 
-    def call(request, mode=None):
+    def call(request, mode=None, meta=None):
         seen.update(request)
         return {"task_id": request["task_id"], "proposals": [], "abstentions": [], "flags": []}, "{}", 1
     monkeypatch.setattr(scribe, "call_ai", call)

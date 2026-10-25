@@ -53,14 +53,37 @@ services:
       migrate: {condition: service_completed_successfully}
       mock_ai: {condition: service_started}
 
+  # Optional real-model API (D23): docker compose --profile real up -d api_real
+  # Reads GROQ_API_KEY from the local, git-ignored .env. Same restricted DB role.
+  api_real:
+    build: .
+    profiles: ["real"]
+    command: ["uvicorn", "safecounter.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *app-env
+      AI_PROVIDER: groq
+      ALLOW_AI_MODE_OVERRIDE: "0"
+    env_file:
+      - path: ./.env
+        required: false
+    volumes: [".:/app"]
+    ports: ["8081:8000"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+
   # Runs tests and admin commands: docker compose run --rm tools pytest
+  # AI_PROVIDER is unset here, so tests use the mock; the key is only used by the evaluation.
   tools:
     build: .
     profiles: ["tools"]
+    env_file:
+      - path: ./.env
+        required: false
     environment:
       <<: [*owner-env, *app-env]
       AI_DEADLINE_SECONDS: "2"
       SC_API: http://api:8000
+      DELIVERY_DATABASE_URL: postgresql://sc_delivery:delivery_pw@db:5432/safecounter
     volumes: [".:/app"]
     depends_on:
       db: {condition: service_healthy}
